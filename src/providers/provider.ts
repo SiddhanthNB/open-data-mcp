@@ -1,31 +1,39 @@
 import type {
-  Dataset,
-  DatasetSearchResult,
+  DataLink,
+  DataDescription,
+  DataSearchResult,
   ProviderConfig,
-  Resource,
+  QuerySelectors,
+  QueryDataResult,
 } from "../models";
 
-export interface SearchDatasetsInput {
+export interface SearchDataInput {
   query?: string;
   limit?: number;
   offset?: number;
 }
 
-export interface GetDatasetInput {
-  dataset_id: string;
+export interface DescribeDataInput {
+  data_id: string;
 }
 
-export interface GetResourceInput {
-  dataset_id: string;
-  resource_id: string;
+export interface QueryDataInput extends QuerySelectors {
+  data_id: string;
+  access_id: string;
   limit?: number;
   offset?: number;
+}
+
+export interface GetDataLinkInput {
+  data_id: string;
+  access_id: string;
 }
 
 export interface ProviderAdapter {
   readonly config: ProviderConfig;
 
-  searchDatasets(input: SearchDatasetsInput): Promise<DatasetSearchResult>;
-  getDataset(input: GetDatasetInput): Promise<Dataset>;
-  getResource(input: GetResourceInput): Promise<Resource>;
+  searchData(input: SearchDataInput): Promise<DataSearchResult>;
+  describeData(input: DescribeDataInput): Promise<DataDescription>;
+  queryData(input: QueryDataInput): Promise<QueryDataResult>;
+  getDataLink(input: GetDataLinkInput): Promise<DataLink>;
 }

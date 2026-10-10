@@ -2,11 +2,11 @@ import { parse } from "yaml";
 import { z } from "zod";
 
 import {
+  OPEN_METEO_HOURLY_FIELDS,
   PROVIDER_OPERATIONS,
   SOURCES,
-  type ProviderCapabilities,
-  type ProviderConfig,
-  type ResourceFormat,
+  type CatalogueProviderConfig,
+  type ForecastApiProviderConfig,
   type Source,
 } from "../models";
 
@@ -62,24 +62,74 @@ const scopeSchema = z
   })
   .strict();
 
-const providerConfigSchema = z
+const commonProviderFields = {
+  authoritative: z.boolean(),
+  coverage: z.string().trim().min(1),
+  description: z.string().trim().min(1),
+  base_url: z
+    .string()
+    .url()
+    .refine((value) => new URL(value).protocol === "https:", {
+      message: "base_url must use HTTPS",
+    })
+    .refine((value) => !value.endsWith("/"), {
+      message: "base_url must not end with a slash",
+    }),
+  http_timeout_ms: z.number().int().positive(),
+  pagination: paginationSchema,
+  capabilities: capabilitiesSchema,
+  formats: formatsSchema,
+} as const;
+
+const forecastBoundsSchema = z
   .object({
-    provider: z.enum(SOURCES),
-    base_url: z
+    min_latitude: z.number().finite().min(-90).max(90),
+    max_latitude: z.number().finite().min(-90).max(90),
+    min_longitude: z.number().finite().min(-180).max(180),
+    max_longitude: z.number().finite().min(-180).max(180),
+  })
+  .strict()
+  .refine((bounds) => bounds.min_latitude < bounds.max_latitude, {
+    message: "min_latitude must be less than max_latitude",
+    path: ["min_latitude"],
+  })
+  .refine((bounds) => bounds.min_longitude < bounds.max_longitude, {
+    message: "min_longitude must be less than max_longitude",
+    path: ["min_longitude"],
+  });
+
+const metForecastSchema = z
+  .object({
+    endpoint: z
       .string()
       .url()
-      .refine((value) => new URL(value).protocol === "https:", {
-        message: "base_url must use HTTPS",
-      })
-      .refine((value) => !value.endsWith("/"), {
-        message: "base_url must not end with a slash",
+      .refine((value) => {
+        const url = new URL(value);
+        return (
+          url.username === "" &&
+          url.password === "" &&
+          url.search === "" &&
+          url.hash === "" &&
+          (url.protocol === "https:" ||
+            value ===
+              "http://openaccess.pf.api.met.ie/metno-wdb2ts/locationforecast")
+        );
+      }, {
+        message:
+          "forecast endpoint must use HTTPS or the official Met Eireann HTTP endpoint",
       }),
+    bounds: forecastBoundsSchema,
+  })
+  .strict();
+
+const catalogueProviderConfigSchema = z
+  .object({
+    provider: z.enum(["data_gov_ie", "smart_dublin", "met_eireann"]),
+    type: z.literal("catalogue"),
+    ...commonProviderFields,
     endpoints: endpointsSchema,
-    http_timeout_ms: z.number().int().positive(),
-    pagination: paginationSchema,
-    capabilities: capabilitiesSchema,
-    formats: formatsSchema,
     scope: scopeSchema.optional(),
+    forecast: metForecastSchema.optional(),
   })
   .strict()
   .superRefine((config, context) => {
@@ -91,6 +141,14 @@ const providerConfigSchema = z
       });
     }
 
+    if (config.provider === "met_eireann" && config.forecast === undefined) {
+      context.addIssue({
+        code: "custom",
+        message: "met_eireann requires forecast settings",
+        path: ["forecast"],
+      });
+    }
+
     if (config.provider !== "met_eireann" && config.scope !== undefined) {
       context.addIssue({
         code: "custom",
@@ -98,7 +156,87 @@ const providerConfigSchema = z
         path: ["scope"],
       });
     }
+
+    if (config.provider !== "met_eireann" && config.forecast !== undefined) {
+      context.addIssue({
+        code: "custom",
+        message: "forecast settings are only supported for met_eireann",
+        path: ["forecast"],
+      });
+    }
   });
+
+const openMeteoForecastSchema = z
+  .object({
+    data_id: z.literal("weather_forecast"),
+    access_id: z.literal("hourly_forecast"),
+    endpoint: z.literal("https://api.open-meteo.com/v1/forecast"),
+    model: z.literal("ecmwf_ifs"),
+    horizon_days: z.number().int().positive().max(15),
+    allowed_hourly_fields: z
+      .array(z.enum(OPEN_METEO_HOURLY_FIELDS))
+      .min(1)
+      .refine((fields) => new Set(fields).size === fields.length, {
+        message: "allowed_hourly_fields must not contain duplicates",
+      }),
+    max_fields: z.literal(10),
+    timezone: z.literal("GMT"),
+    timeformat: z.literal("iso8601"),
+    temperature_unit: z.literal("celsius"),
+    wind_speed_unit: z.literal("kmh"),
+    precipitation_unit: z.literal("mm"),
+    cell_selection: z.literal("land"),
+    attribution: z
+      .object({
+        provider: z.string().trim().min(1),
+        weather_model: z.string().trim().min(1),
+        licence: z.string().trim().min(1),
+        url: z
+          .string()
+          .url()
+          .refine((value) => new URL(value).protocol === "https:", {
+            message: "attribution URL must use HTTPS",
+          }),
+      })
+      .strict(),
+  })
+  .strict()
+  .refine(
+    (forecast) =>
+      forecast.max_fields <= forecast.allowed_hourly_fields.length,
+    {
+      message: "max_fields must not exceed the allowlisted field count",
+      path: ["max_fields"],
+    },
+  );
+
+const forecastApiProviderConfigSchema = z
+  .object({
+    provider: z.literal("open_meteo_ie"),
+    type: z.literal("forecast_api"),
+    ...commonProviderFields,
+    endpoints: z.object({ forecast: endpointPathSchema }).strict(),
+    forecast: openMeteoForecastSchema,
+  })
+  .strict()
+  .superRefine((config, context) => {
+    const resolved = new URL(
+      config.endpoints.forecast,
+      config.base_url,
+    ).toString();
+    if (resolved !== config.forecast.endpoint) {
+      context.addIssue({
+        code: "custom",
+        message: "forecast endpoint must match base_url and endpoints.forecast",
+        path: ["forecast", "endpoint"],
+      });
+    }
+  });
+
+const providerConfigSchema = z.discriminatedUnion("type", [
+  catalogueProviderConfigSchema,
+  forecastApiProviderConfigSchema,
+]);
 
 export interface CkanEndpoints {
   readonly [endpoint: string]: string;
@@ -112,19 +250,30 @@ export interface ProviderScope {
   readonly organization_id: string;
 }
 
-export interface LoadedProviderConfig extends ProviderConfig {
-  readonly provider: Source;
-  readonly base_url: string;
-  readonly endpoints: CkanEndpoints;
-  readonly http_timeout_ms: number;
-  readonly pagination: Readonly<{
-    default_limit: number;
-    max_limit: number;
-  }>;
-  readonly capabilities: Readonly<ProviderCapabilities>;
-  readonly formats: readonly ResourceFormat[];
-  readonly scope?: ProviderScope;
-}
+export type LoadedCatalogueProviderConfig = Readonly<
+  CatalogueProviderConfig &
+    Required<
+      Pick<
+        CatalogueProviderConfig,
+        "authoritative" | "coverage" | "description"
+      >
+    > &
+    { readonly endpoints: CkanEndpoints }
+>;
+
+export type LoadedForecastApiProviderConfig = Readonly<
+  ForecastApiProviderConfig &
+    Required<
+      Pick<
+        ForecastApiProviderConfig,
+        "authoritative" | "coverage" | "description"
+      >
+    >
+>;
+
+export type LoadedProviderConfig =
+  | LoadedCatalogueProviderConfig
+  | LoadedForecastApiProviderConfig;
 
 export interface ProviderConfigDocument {
   readonly expectedProvider: Source;

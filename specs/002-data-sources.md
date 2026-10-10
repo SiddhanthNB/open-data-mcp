@@ -2,11 +2,12 @@
 
 ## Overview
 
-Ireland Open Data MCP initially supports three providers:
+Ireland Open Data MCP supports four providers:
 
 - `data_gov_ie`
 - `smart_dublin`
 - `met_eireann`
+- `open_meteo_ie`
 
 Each provider is implemented through its own adapter and configuration file.
 
@@ -17,6 +18,7 @@ Each provider has an independent YAML configuration file:
 - `config/data_gov_ie.yml`
 - `config/smart_dublin.yml`
 - `config/met_eireann.yml`
+- `config/open_meteo_ie.yml`
 
 Provider URLs and operational settings must not be hardcoded in application code.
 
@@ -36,6 +38,9 @@ Provider configuration may define:
 - maximum result limits
 - supported resource formats
 - other connection-level settings
+- authority status and geographic coverage
+- provider-specific forecast endpoint, model, field allowlist, units, horizon,
+  attribution, and spatial bounds where applicable
 
 Response parsing and provider-specific transformation logic must remain in adapter code.
 
@@ -47,10 +52,13 @@ Example structure:
 
     provider: data_gov_ie
 
+    type: catalogue
+
     capabilities:
-      search_datasets: true
-      get_dataset: true
-      get_resource: true
+      search_data_by_source: true
+      describe_data_by_id: true
+      query_data_by_id: true
+      get_data_link_by_id: true
 
     formats:
       - csv
@@ -78,8 +86,9 @@ files discoverable instead of making them appear absent.
 
 The initial shared direct handlers support CSV, JSON, and XML. A resource backed
 by CKAN DataStore may instead be returned through DataStore as typed JSON.
-Attempting to retrieve any other direct format must return the standardized
-`UNSUPPORTED_FORMAT` error.
+Attempting to query any other direct format must return the standardized
+`UNSUPPORTED_FORMAT` error. Unsupported formats remain available through
+`get_data_link_by_id` when the catalogue provides a browser-openable URL.
 
 ## Provider Adapters
 
@@ -88,6 +97,7 @@ Each provider has its own adapter:
 - `DataGovAdapter`
 - `SmartDublinAdapter`
 - `MetEireannAdapter`
+- `OpenMeteoAdapter`
 
 Adapters are responsible for:
 
@@ -137,11 +147,39 @@ Source identifier:
 
 The adapter provides access to publicly available Met Éireann data.
 
-Unlike catalogue-oriented providers, its underlying API structure may differ significantly.
+It exposes the Met Éireann publisher subset of data.gov.ie and the official
+point forecast for dataset `fa9574c1-48f4-4a98-a22b-d1c23c433821` through the
+synthetic `point_forecast` access point. Point forecasts require a configured
+Ireland-bounded WGS84 point. The adapter converts the forecast XML into bounded
+structured data without changing its weather semantics.
+
+Met Éireann is authoritative. Public displays of its forecast data must follow
+the upstream licence notice, including attribution and weather-warning display
+requirements.
 
 These differences must remain hidden inside `MetEireannAdapter`.
 
 The MCP layer must continue exposing the same generic interface.
+
+## Open-Meteo Ireland
+
+Source identifier:
+
+`open_meteo_ie`
+
+This source exposes a small configured catalogue containing the
+`weather_forecast` data object and its `hourly_forecast` access point. It
+returns forecast data only for WGS84 points inside the Republic of Ireland.
+Place-name geocoding is not supported.
+
+The source forces the configured `ecmwf_ifs` model and accepts at most ten
+unique fields from its configured hourly field allowlist. It requires a bounded
+forecast time range and returns JSON rows with the upstream units and model
+provenance.
+
+Open-Meteo is operated by Open-Meteo GmbH, not an Irish public body. Its data is
+non-authoritative model output, not observations or an official Irish forecast.
+It must remain visibly distinct from Met Éireann.
 
 ## Resource Retrieval
 
@@ -158,9 +196,11 @@ CSV handlers preserve source values as strings. DataStore retrieval preserves
 the value types returned by CKAN. The server must not infer types or reinterpret
 provider-specific sentinel values.
 
-For OpenAPI or similar description documents, `get_resource` returns the
+For OpenAPI or similar description documents, `query_data_by_id` returns the
 catalogued document itself. It does not execute the API described by that
-document or accept arbitrary provider-specific request parameters.
+document or accept arbitrary provider-specific request parameters. The two
+explicit forecast adapters are allowlisted implementations, not general API
+execution.
 
 ## Configuration-Driven Behaviour
 

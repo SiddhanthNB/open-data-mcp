@@ -25,7 +25,8 @@ Application source code is stored under `src/`.
 
 `src/index.ts` is the Worker entry point. It exposes `/mcp` through `createMcpHandler` from `agents/mcp/server`.
 
-`src/server.ts` creates a fresh `McpServer` from `@modelcontextprotocol/server` for each request and registers the generic MCP tools.
+`src/server.ts` creates a fresh `McpServer` from `@modelcontextprotocol/server`
+for each request and registers the five generic MCP tools.
 
 The core service is stateless. It must not use `McpAgent`, legacy stateful transports, or Durable Objects.
 
@@ -52,6 +53,7 @@ Provider configuration files are stored under:
 - `config/data_gov_ie.yml`
 - `config/smart_dublin.yml`
 - `config/met_eireann.yml`
+- `config/open_meteo_ie.yml`
 
 Configuration should contain provider-specific operational settings and capabilities.
 
@@ -60,6 +62,10 @@ Wrangler must bundle the YAML files as read-only text modules. The TypeScript co
 The Worker must not rely on runtime filesystem access.
 
 Sensitive values must not be committed to the repository.
+
+The Met Éireann forecast endpoint is currently the only explicit provider URL
+allowed to use HTTP because that is the published upstream endpoint. Catalogue
+base URLs and all other configured upstream URLs must use HTTPS.
 
 ## Secrets
 
@@ -156,6 +162,17 @@ Potential cache targets include:
 - resource descriptions
 
 Live data should not be cached without an explicit freshness policy.
+
+## Forecast Deployment Gates
+
+The new forecast capabilities must not be deployed until both gates are met:
+
+1. Met Éireann weather-warning display and attribution requirements are
+   implemented for the intended public client experience.
+2. Source-wide Open-Meteo rate limiting is implemented so limits apply across
+   Worker instances rather than only inside one stateless request.
+
+These gates do not block local tests. OAuth does not replace either gate.
 
 ## Deployment Principles
 

@@ -24,6 +24,7 @@ function config(
 ): ProviderConfig {
   return {
     provider,
+    type: "catalogue",
     base_url: "https://catalogue.example.test",
     endpoints: {
       package_search: "/api/3/action/package_search",
@@ -33,9 +34,10 @@ function config(
     http_timeout_ms: 1_000,
     pagination: { default_limit: 10, max_limit: 100 },
     capabilities: {
-      search_datasets: true,
-      get_dataset: true,
-      get_resource: true,
+      search_data_by_source: true,
+      describe_data_by_id: true,
+      query_data_by_id: true,
+      get_data_link_by_id: true,
     },
     formats: ["csv", "json", "xml"],
     ...(scope ? { scope } : {}),
@@ -165,7 +167,7 @@ describe("shared CKAN adapter", () => {
       dependencies(upstream.fetcher, direct.loader),
     );
 
-    const result = await adapter.searchDatasets({
+    const result = await adapter.searchData({
       query: "traffic",
       limit: 7,
       offset: 14,
@@ -184,8 +186,8 @@ describe("shared CKAN adapter", () => {
       returned: 1,
       total: 42,
     });
-    expect(result.datasets[0]).toEqual({
-      dataset_id: "dataset-1",
+    expect(result.results[0]).toEqual({
+      data_id: "dataset-1",
       title: "Dataset One",
       description: "Original description",
       publisher: "Publisher",
@@ -207,7 +209,7 @@ describe("shared CKAN adapter", () => {
       dependencies(upstream.fetcher, direct.loader),
     );
 
-    const result = await adapter.searchDatasets({});
+    const result = await adapter.searchData({});
 
     const url = new URL(upstream.calls[0]!.url);
     expect(url.searchParams.get("rows")).toBe("10");
@@ -228,10 +230,10 @@ describe("shared CKAN adapter", () => {
       dependencies(upstream.fetcher, direct.loader),
     );
 
-    const result = await adapter.getDataset({ dataset_id: "dataset-1" });
+    const result = await adapter.describeData({ data_id: "dataset-1" });
 
     expect(result).toMatchObject({
-      dataset_id: "dataset-1",
+      data_id: "dataset-1",
       title: "Dataset One",
       description: "Original description",
       publisher: "Publisher",
@@ -239,40 +241,94 @@ describe("shared CKAN adapter", () => {
       tags: ["transport", "traffic"],
       provenance: { source: "smart_dublin" },
     });
-    expect(result.resources).toEqual([
+    expect(result.access_points).toEqual([
       {
-        resource_id: "resource-csv",
+        access_id: "resource-csv",
         title: "CSV rows",
         description: "Raw rows",
         format: "csv",
-        supported: true,
+        capabilities: { query: true, link: true },
         size: 1_234,
         last_modified: "2026-10-01T10:30:00",
-        datastore_active: true,
         upstream_url: "https://files.example.test/rows.csv",
       },
       {
-        resource_id: "resource-json",
+        access_id: "resource-json",
         format: "json",
-        supported: true,
-        datastore_active: false,
+        capabilities: { query: true, link: true },
         upstream_url: "https://files.example.test/rows.json",
       },
       {
-        resource_id: "resource-xml",
+        access_id: "resource-xml",
         format: "xml",
-        supported: true,
-        datastore_active: false,
+        capabilities: { query: true, link: true },
         upstream_url: "https://files.example.test/rows.xml",
       },
       {
-        resource_id: "resource-pdf",
+        access_id: "resource-pdf",
         format: "pdf",
-        supported: false,
-        datastore_active: false,
+        capabilities: { query: false, link: true },
         upstream_url: "https://files.example.test/rows.pdf",
       },
     ]);
+  });
+
+  it("returns catalogued link metadata without loading resource bytes", async () => {
+    const upstream = queuedFetch(success(packageRecord()));
+    const direct = recordingLoader();
+    const adapter = new DataGovAdapter(
+      config(),
+      dependencies(upstream.fetcher, direct.loader),
+    );
+
+    const result = await adapter.getDataLink({
+      data_id: "dataset-1",
+      access_id: "resource-pdf",
+    });
+
+    expect(upstream.calls).toHaveLength(1);
+    expect(direct.calls).toHaveLength(0);
+    expect(result).toEqual({
+      data_id: "dataset-1",
+      access_id: "resource-pdf",
+      url: "https://files.example.test/rows.pdf",
+      format: "pdf",
+      provenance: {
+        source: "data_gov_ie",
+        upstream_url: "https://files.example.test/rows.pdf",
+        retrieved_at: NOW.toISOString(),
+        original_format: "pdf",
+      },
+    });
+  });
+
+  it("rejects catalogued links that are not browser-openable HTTP URLs", async () => {
+    const upstream = queuedFetch(
+      success(
+        packageRecord({
+          resources: [
+            {
+              id: "resource-private",
+              format: "ZIP",
+              url: "file:///private/data.zip",
+            },
+          ],
+        }),
+      ),
+    );
+    const direct = recordingLoader();
+    const adapter = new DataGovAdapter(
+      config(),
+      dependencies(upstream.fetcher, direct.loader),
+    );
+
+    await expect(
+      adapter.getDataLink({
+        data_id: "dataset-1",
+        access_id: "resource-private",
+      }),
+    ).rejects.toMatchObject({ code: "UNSUPPORTED_OPERATION" });
+    expect(direct.calls).toHaveLength(0);
   });
 
   it("normalizes dataset and resource descriptions to visible plain text", async () => {
@@ -299,10 +355,10 @@ describe("shared CKAN adapter", () => {
       dependencies(upstream.fetcher, direct.loader),
     );
 
-    const result = await adapter.getDataset({ dataset_id: "dataset-1" });
+    const result = await adapter.describeData({ data_id: "dataset-1" });
 
     expect(result.description).toBe("Public data");
-    expect(result.resources[0]?.description).toBe("Contact us");
+    expect(result.access_points[0]?.description).toBe("Contact us");
   });
 
   it("lists normalized unsupported formats and ignores empty formats", async () => {
@@ -343,9 +399,9 @@ describe("shared CKAN adapter", () => {
       dependencies(upstream.fetcher, direct.loader),
     );
 
-    const result = await adapter.searchDatasets({});
+    const result = await adapter.searchData({});
 
-    expect(result.datasets[0]?.available_formats).toEqual([
+    expect(result.results[0]?.available_formats).toEqual([
       "xlsx",
       "zip",
       "geojson",
@@ -376,20 +432,20 @@ describe("shared CKAN adapter", () => {
       dependencies(upstream.fetcher, direct.loader),
     );
 
-    const result = await adapter.getDataset({ dataset_id: "dataset-1" });
+    const result = await adapter.describeData({ data_id: "dataset-1" });
 
     expect(result.available_formats).toBeUndefined();
-    expect(result.resources).toEqual([
+    expect(result.access_points).toEqual([
       {
-        resource_id: "resource-blank",
+        access_id: "resource-blank",
         format: "unknown",
-        supported: false,
+        capabilities: { query: false, link: true },
         upstream_url: "https://files.example.test/blank",
       },
       {
-        resource_id: "resource-missing",
+        access_id: "resource-missing",
         format: "unknown",
-        supported: false,
+        capabilities: { query: false, link: true },
         upstream_url: "https://files.example.test/missing",
       },
     ]);
@@ -415,17 +471,17 @@ describe("shared CKAN adapter", () => {
       dependencies(upstream.fetcher, direct.loader),
     );
 
-    const result = await adapter.getDataset({ dataset_id: "dataset-1" });
+    const result = await adapter.describeData({ data_id: "dataset-1" });
 
     expect(result.tags).toEqual(["Daily", "Meteorology"]);
-    expect(result.resources.map(({ format, supported }) => ({
+    expect(result.access_points.map(({ format, capabilities }) => ({
       format,
-      supported,
+      query: capabilities.query,
     }))).toEqual([
-      { format: "csv", supported: true },
-      { format: "json", supported: false },
-      { format: "xml", supported: false },
-      { format: "pdf", supported: false },
+      { format: "csv", query: true },
+      { format: "json", query: false },
+      { format: "xml", query: false },
+      { format: "pdf", query: false },
     ]);
   });
 
@@ -440,7 +496,7 @@ describe("shared CKAN adapter", () => {
       dependencies(upstream.fetcher, direct.loader),
     );
 
-    await adapter.searchDatasets({});
+    await adapter.searchData({});
 
     expect(new URL(upstream.calls[0]!.url).searchParams.get("fq")).toBe(
       "organization:meteireann",
@@ -474,9 +530,9 @@ describe("shared CKAN adapter", () => {
       dependencies(upstream.fetcher, direct.loader),
     );
 
-    const result = await adapter.searchDatasets({});
+    const result = await adapter.searchData({});
 
-    expect(result.datasets.map((dataset) => dataset.dataset_id)).toEqual([
+    expect(result.results.map((dataset) => dataset.data_id)).toEqual([
       "met-dataset",
     ]);
     expect(result.pagination).toEqual({
@@ -501,7 +557,7 @@ describe("shared CKAN adapter", () => {
     );
 
     await expect(
-      adapter.getDataset({ dataset_id: "dataset-1" }),
+      adapter.describeData({ data_id: "dataset-1" }),
     ).rejects.toMatchObject({ code: "DATASET_NOT_FOUND" });
   });
 
@@ -519,9 +575,9 @@ describe("shared CKAN adapter", () => {
     );
 
     await expect(
-      adapter.getResource({
-        dataset_id: "dataset-1",
-        resource_id: "resource-json",
+      adapter.queryData({
+        data_id: "dataset-1",
+        access_id: "resource-json",
       }),
     ).rejects.toMatchObject({ code: "DATASET_NOT_FOUND" });
     expect(direct.calls).toHaveLength(0);
@@ -539,9 +595,9 @@ describe("shared CKAN adapter", () => {
       dependencies(upstream.fetcher, direct.loader),
     );
 
-    const result = await adapter.getResource({
-      dataset_id: "dataset-1",
-      resource_id: "resource-csv",
+    const result = await adapter.queryData({
+      data_id: "dataset-1",
+      access_id: "resource-csv",
       limit: 2,
       offset: 4,
     });
@@ -555,8 +611,8 @@ describe("shared CKAN adapter", () => {
     });
     expect(direct.calls).toHaveLength(0);
     expect(result).toEqual({
-      dataset_id: "dataset-1",
-      resource_id: "resource-csv",
+      data_id: "dataset-1",
+      access_id: "resource-csv",
       data: [{ row: 1 }, { row: 2 }],
       provenance: {
         source: "data_gov_ie",
@@ -590,9 +646,9 @@ describe("shared CKAN adapter", () => {
       dependencies(upstream.fetcher, direct.loader),
     );
 
-    const result = await adapter.getResource({
-      dataset_id: "dataset-1",
-      resource_id: "resource-xlsx",
+    const result = await adapter.queryData({
+      data_id: "dataset-1",
+      access_id: "resource-xlsx",
     });
 
     expect(result.provenance.original_format).toBe("xlsx");
@@ -617,9 +673,9 @@ describe("shared CKAN adapter", () => {
     );
 
     await expect(
-      adapter.getResource({
-        dataset_id: "dataset-1",
-        resource_id: "resource-csv",
+      adapter.queryData({
+        data_id: "dataset-1",
+        access_id: "resource-csv",
       }),
     ).rejects.toMatchObject({ code: "RESOURCE_TOO_LARGE" });
     expect(direct.calls).toHaveLength(0);
@@ -634,8 +690,8 @@ describe("shared CKAN adapter", () => {
       offset: "0",
     });
     const expected = {
-      dataset_id: "dataset-1",
-      resource_id: "resource-csv",
+      data_id: "dataset-1",
+      access_id: "resource-csv",
       data: [{ row: 1 }],
       provenance: {
         source: "data_gov_ie",
@@ -669,9 +725,9 @@ describe("shared CKAN adapter", () => {
     );
 
     await expect(
-      adapter.getResource({
-        dataset_id: "dataset-1",
-        resource_id: "resource-csv",
+      adapter.queryData({
+        data_id: "dataset-1",
+        access_id: "resource-csv",
         limit: 1,
       }),
     ).resolves.toEqual(expected);
@@ -680,8 +736,8 @@ describe("shared CKAN adapter", () => {
   it("rejects a normalized DataStore envelope above the output limit", async () => {
     const datastore = { total: 1, records: [{ row: 1 }] };
     const expected = {
-      dataset_id: "dataset-1",
-      resource_id: "resource-csv",
+      data_id: "dataset-1",
+      access_id: "resource-csv",
       data: datastore.records,
       provenance: {
         source: "data_gov_ie",
@@ -703,9 +759,9 @@ describe("shared CKAN adapter", () => {
     );
 
     await expect(
-      adapter.getResource({
-        dataset_id: "dataset-1",
-        resource_id: "resource-csv",
+      adapter.queryData({
+        data_id: "dataset-1",
+        access_id: "resource-csv",
         limit: 1,
       }),
     ).rejects.toMatchObject({ code: "RESOURCE_TOO_LARGE" });
@@ -722,9 +778,9 @@ describe("shared CKAN adapter", () => {
     );
 
     await expect(
-      adapter.getResource({
-        dataset_id: "dataset-1",
-        resource_id: "resource-json",
+      adapter.queryData({
+        data_id: "dataset-1",
+        access_id: "resource-json",
       }),
     ).rejects.toMatchObject({ code: "RESOURCE_TOO_LARGE" });
   });
@@ -745,9 +801,9 @@ describe("shared CKAN adapter", () => {
         dependencies(upstream.fetcher, direct.loader),
       );
 
-      const result = await adapter.getResource({
-        dataset_id: "dataset-1",
-        resource_id: resourceId,
+      const result = await adapter.queryData({
+        data_id: "dataset-1",
+        access_id: resourceId,
         limit: 5,
         offset: 1,
       });
@@ -796,9 +852,9 @@ describe("shared CKAN adapter", () => {
         dependencies(upstream.fetcher, direct.loader),
       );
 
-      const result = await adapter.getResource({
-        dataset_id: "dataset-1",
-        resource_id: "resource-direct",
+      const result = await adapter.queryData({
+        data_id: "dataset-1",
+        access_id: "resource-direct",
       });
 
       expect(direct.calls[0]?.format).toBe(handlerFormat);
@@ -830,9 +886,9 @@ describe("shared CKAN adapter", () => {
     );
 
     await expect(
-      adapter.getResource({
-        dataset_id: "dataset-1",
-        resource_id: "resource-direct",
+      adapter.queryData({
+        data_id: "dataset-1",
+        access_id: "resource-direct",
       }),
     ).rejects.toMatchObject({ code: "UNSUPPORTED_FORMAT" });
     expect(direct.calls).toHaveLength(0);
@@ -847,9 +903,9 @@ describe("shared CKAN adapter", () => {
     );
 
     await expect(
-      adapter.getResource({
-        dataset_id: "dataset-1",
-        resource_id: "not-in-dataset",
+      adapter.queryData({
+        data_id: "dataset-1",
+        access_id: "not-in-dataset",
       }),
     ).rejects.toMatchObject({ code: "RESOURCE_NOT_FOUND" });
     expect(direct.calls).toHaveLength(0);
@@ -864,9 +920,9 @@ describe("shared CKAN adapter", () => {
     );
 
     await expect(
-      adapter.getResource({
-        dataset_id: "dataset-1",
-        resource_id: "resource-pdf",
+      adapter.queryData({
+        data_id: "dataset-1",
+        access_id: "resource-pdf",
       }),
     ).rejects.toMatchObject({ code: "UNSUPPORTED_FORMAT" });
   });
@@ -880,7 +936,7 @@ describe("shared CKAN adapter", () => {
     );
 
     await expect(
-      adapter.searchDatasets({ limit: 101 }),
+      adapter.searchData({ limit: 101 }),
     ).rejects.toMatchObject({ code: "INVALID_REQUEST" });
     expect(upstream.calls).toHaveLength(0);
   });
@@ -927,7 +983,7 @@ describe("CKAN failure mapping", () => {
       dependencies(upstream.fetcher, direct.loader),
     );
 
-    await expect(adapter.searchDatasets({})).rejects.toMatchObject({ code });
+    await expect(adapter.searchData({})).rejects.toMatchObject({ code });
   });
 
   it.each([400, 409])(
@@ -952,7 +1008,7 @@ describe("CKAN failure mapping", () => {
       );
 
       await expect(
-        adapter.searchDatasets({ query: "title:(broken" }),
+        adapter.searchData({ query: "title:(broken" }),
       ).rejects.toMatchObject({
         code: "INVALID_REQUEST",
         message: "The search query is invalid.",
@@ -976,7 +1032,7 @@ describe("CKAN failure mapping", () => {
       dependencies(upstream.fetcher, direct.loader),
     );
 
-    await expect(adapter.searchDatasets({})).rejects.toMatchObject({
+    await expect(adapter.searchData({})).rejects.toMatchObject({
       code: "UPSTREAM_ERROR",
     });
   });
@@ -998,7 +1054,7 @@ describe("CKAN failure mapping", () => {
     );
 
     await expect(
-      adapter.searchDatasets({ query: "title:(broken" }),
+      adapter.searchData({ query: "title:(broken" }),
     ).rejects.toMatchObject({
       code: "INVALID_REQUEST",
       message: "The search query is invalid.",
@@ -1015,7 +1071,7 @@ describe("CKAN failure mapping", () => {
       dependencies(fetcher, direct.loader),
     );
 
-    await expect(adapter.searchDatasets({})).rejects.toMatchObject({
+    await expect(adapter.searchData({})).rejects.toMatchObject({
       code: "UPSTREAM_ERROR",
     });
   });
@@ -1030,7 +1086,7 @@ describe("CKAN failure mapping", () => {
       dependencies(fetcher, direct.loader),
     );
 
-    await expect(adapter.searchDatasets({})).rejects.toMatchObject({
+    await expect(adapter.searchData({})).rejects.toMatchObject({
       code: "UPSTREAM_TIMEOUT",
     });
   });
@@ -1059,7 +1115,7 @@ describe("CKAN failure mapping", () => {
       dependencies(fetcher, direct.loader),
     );
 
-    await expect(adapter.searchDatasets({})).rejects.toMatchObject({
+    await expect(adapter.searchData({})).rejects.toMatchObject({
       code: "UPSTREAM_TIMEOUT",
     });
   });
@@ -1078,7 +1134,7 @@ describe("CKAN failure mapping", () => {
     );
 
     await expect(
-      adapter.getDataset({ dataset_id: "missing" }),
+      adapter.describeData({ data_id: "missing" }),
     ).rejects.toMatchObject({ code: "DATASET_NOT_FOUND" });
   });
 
@@ -1090,7 +1146,7 @@ describe("CKAN failure mapping", () => {
       dependencies(upstream.fetcher, direct.loader),
     );
 
-    await expect(adapter.searchDatasets({})).rejects.toMatchObject({
+    await expect(adapter.searchData({})).rejects.toMatchObject({
       code: "UPSTREAM_ERROR",
     });
   });

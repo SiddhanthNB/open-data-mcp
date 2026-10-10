@@ -1,19 +1,22 @@
 import { AppError } from "../../errors";
+import { isBrowserDataUrl } from "../../links";
 import type {
-  Dataset,
-  DatasetSearchResult,
-  DatasetSummary,
+  AccessPoint,
+  DataLink,
+  DataDescription,
+  DataSearchResult,
+  DataSummary,
   Pagination,
   ProviderConfig,
-  Resource,
+  QueryDataResult,
   ResourceFormat,
-  ResourceSummary,
 } from "../../models";
 import type {
-  GetDatasetInput,
-  GetResourceInput,
+  DescribeDataInput,
+  GetDataLinkInput,
   ProviderAdapter,
-  SearchDatasetsInput,
+  QueryDataInput,
+  SearchDataInput,
 } from "../provider";
 import { enforceSerializedSize } from "../../resources/limits";
 import { CkanClient, isRecord, type CkanRecord } from "./client";
@@ -67,9 +70,7 @@ export class CkanAdapter implements ProviderAdapter {
     this.now = dependencies.now ?? (() => new Date());
   }
 
-  async searchDatasets(
-    input: SearchDatasetsInput,
-  ): Promise<DatasetSearchResult> {
+  async searchData(input: SearchDataInput): Promise<DataSearchResult> {
     const { limit, offset } = this.pagination(input.limit, input.offset);
     const parameters = new URLSearchParams({
       rows: String(limit),
@@ -88,38 +89,38 @@ export class CkanAdapter implements ProviderAdapter {
     const result = await this.client.packageSearch(parameters);
     const count = numberField(result, "count");
     const packages = arrayField(result, "results").map(recordValue);
-    const datasets = packages
+    const results = packages
       .filter((dataset) => this.isInScope(dataset))
-      .map((dataset) => this.mapDatasetSummary(dataset));
+      .map((dataset) => this.mapDataSummary(dataset));
 
     return {
-      datasets,
+      results,
       pagination: {
         limit,
         offset,
-        returned: datasets.length,
+        returned: results.length,
         total: count,
       },
     };
   }
 
-  async getDataset(input: GetDatasetInput): Promise<Dataset> {
-    const dataset = await this.client.packageShow(input.dataset_id);
+  async describeData(input: DescribeDataInput): Promise<DataDescription> {
+    const dataset = await this.client.packageShow(input.data_id);
     this.enforceScope(dataset);
-    return this.mapDataset(dataset);
+    return this.mapDataDescription(dataset);
   }
 
-  async getResource(input: GetResourceInput): Promise<Resource> {
-    if (!input.dataset_id) {
+  async queryData(input: QueryDataInput): Promise<QueryDataResult> {
+    if (!input.data_id) {
       throw new AppError("INVALID_REQUEST");
     }
 
-    const dataset = await this.client.packageShow(input.dataset_id);
+    const dataset = await this.client.packageShow(input.data_id);
     this.enforceScope(dataset);
     const resources = arrayField(dataset, "resources");
     const resource = resources
       .map(recordValue)
-      .find((candidate) => stringField(candidate, "id") === input.resource_id);
+      .find((candidate) => stringField(candidate, "id") === input.access_id);
     if (!resource) {
       throw new AppError("RESOURCE_NOT_FOUND");
     }
@@ -150,9 +151,9 @@ export class CkanAdapter implements ProviderAdapter {
       const records = arrayField(result, "records");
       const total = numberField(result, "total");
 
-      return this.boundedResource({
-        dataset_id: datasetId,
-        resource_id: resourceId,
+      return this.boundedQueryResult({
+        data_id: datasetId,
+        access_id: resourceId,
         data: records,
         provenance: {
           source: this.config.provider,
@@ -193,9 +194,9 @@ export class CkanAdapter implements ProviderAdapter {
       throw new AppError("UPSTREAM_ERROR");
     }
 
-    return this.boundedResource({
-      dataset_id: datasetId,
-      resource_id: resourceId,
+    return this.boundedQueryResult({
+      data_id: datasetId,
+      access_id: resourceId,
       data: loaded.data,
       provenance: {
         source: this.config.provider,
@@ -209,19 +210,57 @@ export class CkanAdapter implements ProviderAdapter {
     });
   }
 
-  private boundedResource(resource: Resource): Resource {
-    enforceSerializedSize(resource, this.maxOutputBytes);
-    return resource;
+  async getDataLink(input: GetDataLinkInput): Promise<DataLink> {
+    const dataset = await this.client.packageShow(input.data_id);
+    this.enforceScope(dataset);
+    const resource = arrayField(dataset, "resources")
+      .map(recordValue)
+      .find((candidate) => stringField(candidate, "id") === input.access_id);
+    if (!resource) {
+      throw new AppError("RESOURCE_NOT_FOUND");
+    }
+
+    const summary = this.mapAccessPoint(resource);
+    if (!isBrowserDataUrl(summary.upstream_url)) {
+      throw new AppError(
+        "UNSUPPORTED_OPERATION",
+        "The requested access point does not provide a browser-openable link.",
+      );
+    }
+
+    return {
+      data_id: stringField(dataset, "id"),
+      access_id: summary.access_id,
+      url: summary.upstream_url,
+      format: summary.format,
+      ...(summary.title ? { title: summary.title } : {}),
+      ...(summary.description ? { description: summary.description } : {}),
+      ...(summary.size !== undefined ? { size: summary.size } : {}),
+      ...(summary.last_modified
+        ? { last_modified: summary.last_modified }
+        : {}),
+      provenance: {
+        source: this.config.provider,
+        upstream_url: summary.upstream_url,
+        retrieved_at: this.now().toISOString(),
+        original_format: summary.format,
+      },
+    };
   }
 
-  private mapDatasetSummary(dataset: CkanRecord): DatasetSummary {
+  private boundedQueryResult(result: QueryDataResult): QueryDataResult {
+    enforceSerializedSize(result, this.maxOutputBytes);
+    return result;
+  }
+
+  private mapDataSummary(dataset: CkanRecord): DataSummary {
     const resources = arrayField(dataset, "resources").map(recordValue);
     const formats = uniqueFormats(resources);
     const organization = optionalRecord(dataset.organization);
     const description = normalizedDescription(dataset.notes);
 
     return {
-      dataset_id: stringField(dataset, "id"),
+      data_id: stringField(dataset, "id"),
       title: optionalString(dataset.title) ?? stringField(dataset, "name"),
       ...(description ? { description } : {}),
       ...(organization && optionalString(organization.title)
@@ -236,11 +275,11 @@ export class CkanAdapter implements ProviderAdapter {
     };
   }
 
-  private mapDataset(dataset: CkanRecord): Dataset {
-    const summary = this.mapDatasetSummary(dataset);
-    const resources = arrayField(dataset, "resources")
+  private mapDataDescription(dataset: CkanRecord): DataDescription {
+    const summary = this.mapDataSummary(dataset);
+    const accessPoints = arrayField(dataset, "resources")
       .map(recordValue)
-      .map((resource) => this.mapResourceSummary(resource));
+      .map((resource) => this.mapAccessPoint(resource));
     const tags = uniqueTags(optionalArray(dataset.tags));
 
     return {
@@ -249,13 +288,11 @@ export class CkanAdapter implements ProviderAdapter {
         ? { licence: optionalString(dataset.license_title) }
         : {}),
       ...(tags && tags.length > 0 ? { tags } : {}),
-      resources,
+      access_points: accessPoints,
     };
   }
 
-  private mapResourceSummary(
-    resource: CkanRecord,
-  ): ResourceSummary {
+  private mapAccessPoint(resource: CkanRecord): AccessPoint {
     const format = advertisedResourceFormat(resource.format);
     const retrievableFormat = resourceFormat(resource.format);
     const datastoreActive = validOptionalBoolean(resource.datastore_active);
@@ -263,22 +300,22 @@ export class CkanAdapter implements ProviderAdapter {
     const lastModified = validOptionalString(resource.last_modified);
     const description = normalizedDescription(resource.description);
     return {
-      resource_id: stringField(resource, "id"),
+      access_id: stringField(resource, "id"),
       ...(optionalString(resource.name)
         ? { title: optionalString(resource.name) }
         : {}),
       ...(description ? { description } : {}),
       format: format ?? "unknown",
-      supported:
-        format !== undefined &&
-        (datastoreActive === true ||
-          (retrievableFormat !== undefined &&
-            this.config.formats.includes(retrievableFormat))),
+      capabilities: {
+        query:
+          format !== undefined &&
+          (datastoreActive === true ||
+            (retrievableFormat !== undefined &&
+              this.config.formats.includes(retrievableFormat))),
+        link: isBrowserDataUrl(stringField(resource, "url")),
+      },
       ...(size !== undefined ? { size } : {}),
       ...(lastModified !== undefined ? { last_modified: lastModified } : {}),
-      ...(datastoreActive !== undefined
-        ? { datastore_active: datastoreActive }
-        : {}),
       upstream_url: stringField(resource, "url"),
     };
   }

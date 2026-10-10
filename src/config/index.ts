@@ -1,5 +1,6 @@
 import dataGovIeYaml from "../../config/data_gov_ie.yml";
 import metEireannYaml from "../../config/met_eireann.yml";
+import openMeteoIeYaml from "../../config/open_meteo_ie.yml";
 import smartDublinYaml from "../../config/smart_dublin.yml";
 import serverYaml from "../../config/server.yml";
 
@@ -12,6 +13,8 @@ import { parseServerConfig } from "./server";
 
 export type {
   CkanEndpoints,
+  LoadedCatalogueProviderConfig,
+  LoadedForecastApiProviderConfig,
   LoadedProviderConfig,
   ProviderConfigDocument,
   ProviderScope,
@@ -28,6 +31,7 @@ export const providerConfigs = loadProviderConfigs([
   { expectedProvider: "data_gov_ie", contents: dataGovIeYaml },
   { expectedProvider: "smart_dublin", contents: smartDublinYaml },
   { expectedProvider: "met_eireann", contents: metEireannYaml },
+  { expectedProvider: "open_meteo_ie", contents: openMeteoIeYaml },
 ]);
 
 export const serverConfig = parseServerConfig(serverYaml);

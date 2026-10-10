@@ -1,4 +1,8 @@
 provider: met_eireann
+type: catalogue
+authoritative: true
+coverage: Republic of Ireland
+description: Official Met Eireann catalogue and point forecast service.
 base_url: https://data.gov.ie
 endpoints:
   package_search: /api/3/action/package_search
@@ -9,9 +13,10 @@ pagination:
   default_limit: 10
   max_limit: 100
 capabilities:
-  search_datasets: true
-  get_dataset: true
-  get_resource: true
+  search_data_by_source: true
+  describe_data_by_id: true
+  query_data_by_id: true
+  get_data_link_by_id: true
 formats:
   - csv
   - json
@@ -19,3 +24,10 @@ formats:
 scope:
   organization_name: meteireann
   organization_id: met-eireann
+forecast:
+  endpoint: http://openaccess.pf.api.met.ie/metno-wdb2ts/locationforecast
+  bounds:
+    min_latitude: 51.3
+    max_latitude: 55.5
+    min_longitude: -11
+    max_longitude: -5.2

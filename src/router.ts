@@ -3,6 +3,7 @@ import {
   isSource,
   SOURCES,
   type ProviderOperation,
+  type SourceDescription,
   type Source,
 } from "./models";
 import type { ProviderAdapter } from "./providers/provider";
@@ -42,5 +43,24 @@ export class SourceRouter {
     }
 
     return adapter;
+  }
+
+  listSources(): readonly SourceDescription[] {
+    return SOURCES.map((source) => {
+      const config = this.adapters.get(source)!.config;
+      return {
+        source,
+        type: config.type,
+        authoritative: config.authoritative ?? false,
+        coverage: config.coverage ?? "Not specified",
+        description: config.description ?? "No source description provided.",
+        capabilities: config.capabilities,
+        formats: config.formats,
+        limits: {
+          default: config.pagination.default_limit,
+          maximum: config.pagination.max_limit,
+        },
+      };
+    });
   }
 }

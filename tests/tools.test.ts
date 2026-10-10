@@ -3,18 +3,20 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { providerConfigs } from "../src/config";
 import type {
-  Dataset,
-  DatasetSearchResult,
+  DataLink,
+  DataDescription,
+  DataSearchResult,
   ProviderCapabilities,
   ProviderConfig,
-  Resource,
+  QueryDataResult,
   Source,
 } from "../src/models";
 import type {
-  GetDatasetInput,
-  GetResourceInput,
+  GetDataLinkInput,
+  DescribeDataInput,
+  QueryDataInput,
   ProviderAdapter,
-  SearchDatasetsInput,
+  SearchDataInput,
 } from "../src/providers/provider";
 import { SourceRouter } from "../src/router";
 import { createServer } from "../src/server";
@@ -24,15 +26,16 @@ const commonMaximumLimit = Math.min(
     (config) => config.pagination.max_limit,
   ),
 );
-const configuredDefaults = Object.values(providerConfigs)
-  .map(
-    (config) =>
-      `${config.provider}=${config.pagination.default_limit}`,
-  )
-  .join(", ");
+
+type ToolContent = {
+  type: string;
+  text?: string;
+  uri?: string;
+  name?: string;
+};
 
 type ToolResult = {
-  content?: Array<{ type: string; text?: string }>;
+  content?: ToolContent[];
   isError?: boolean;
   structuredContent?: Record<string, unknown>;
 };
@@ -58,37 +61,58 @@ const provenance = {
   retrieved_at: "2026-10-04T12:00:00.000Z",
 };
 
-const searchResult: DatasetSearchResult = {
-  datasets: [
+const searchResult: DataSearchResult = {
+  results: [
     {
-      dataset_id: "roads",
+      data_id: "roads",
       title: "Roads",
-      available_formats: ["json"],
+      available_formats: ["json", "xlsx"],
       provenance,
     },
   ],
-  pagination: { limit: 5, offset: 0, returned: 1, total: 1 },
+  pagination: { limit: 1, offset: 0, returned: 1, total: 2 },
 };
 
-const dataset: Dataset = {
-  ...searchResult.datasets[0],
-  resources: [
+const dataset: DataDescription = {
+  ...searchResult.results[0],
+  access_points: [
     {
-      resource_id: "roads-json",
+      access_id: "roads-json",
+      title: "Road rows",
       format: "json",
-      supported: true,
-      upstream_url: "https://example.com/resource/roads-json",
+      capabilities: { query: true, link: true },
+      upstream_url: "https://example.com/resource/roads.json",
+    },
+    {
+      access_id: "roads-xlsx",
+      format: "xlsx",
+      capabilities: { query: false, link: true },
+      upstream_url: "https://example.com/resource/roads.xlsx",
     },
   ],
 };
 
-const resource: Resource = {
-  dataset_id: "roads",
-  resource_id: "roads-json",
+const resource: QueryDataResult = {
+  data_id: "roads",
+  access_id: "roads-json",
   data: [{ id: 1 }],
   provenance: { ...provenance, original_format: "json" },
   pagination_supported: true,
-  pagination: { limit: 1, offset: 0, returned: 1 },
+  pagination: { limit: 1, offset: 0, returned: 1, total: 2 },
+};
+
+const dataLink: DataLink = {
+  data_id: "roads",
+  access_id: "roads-xlsx",
+  url: "https://example.com/files/roads.xlsx",
+  format: "xlsx",
+  title: "Road workbook",
+  size: 1234,
+  provenance: {
+    ...provenance,
+    upstream_url: "https://example.com/files/roads.xlsx",
+    original_format: "xlsx",
+  },
 };
 
 function createAdapter(
@@ -97,6 +121,7 @@ function createAdapter(
 ): ProviderAdapter {
   const config: ProviderConfig = {
     provider,
+    type: "catalogue",
     base_url: "https://example.com",
     endpoints: {},
     http_timeout_ms: 5_000,
@@ -107,28 +132,35 @@ function createAdapter(
 
   return {
     config,
-    searchDatasets: vi.fn(async (_input: SearchDatasetsInput) => searchResult),
-    getDataset: vi.fn(async (_input: GetDatasetInput) => dataset),
-    getResource: vi.fn(async (_input: GetResourceInput) => resource),
+    searchData: vi.fn(async (_input: SearchDataInput) => searchResult),
+    describeData: vi.fn(async (_input: DescribeDataInput) => dataset),
+    queryData: vi.fn(async (_input: QueryDataInput) => resource),
+    getDataLink: vi.fn(async (_input: GetDataLinkInput) => dataLink),
   };
 }
 
 const allCapabilities: ProviderCapabilities = {
-  search_datasets: true,
-  get_dataset: true,
-  get_resource: true,
+  search_data_by_source: true,
+  describe_data_by_id: true,
+  query_data_by_id: true,
+  get_data_link_by_id: true,
 };
 
 const dataGovAdapter = createAdapter("data_gov_ie", allCapabilities);
 const smartDublinAdapter = createAdapter("smart_dublin", allCapabilities);
 const metEireannAdapter = createAdapter("met_eireann", {
   ...allCapabilities,
-  get_resource: false,
+  query_data_by_id: false,
+});
+const openMeteoAdapter = createAdapter("open_meteo_ie", {
+  ...allCapabilities,
+  get_data_link_by_id: false,
 });
 const router = new SourceRouter([
   dataGovAdapter,
   smartDublinAdapter,
   metEireannAdapter,
+  openMeteoAdapter,
 ]);
 const handler = createMcpHandler(() => createServer(router), {
   route: "/mcp",
@@ -171,8 +203,8 @@ async function sendMcpRequest(
 async function callTool(
   name: string,
   args: Record<string, unknown>,
-): Promise<{ response: Response; result: ToolResult }> {
-  const { response, payload } = await sendMcpRequest(
+): Promise<ToolResult> {
+  const { payload } = await sendMcpRequest(
     "tools/call",
     { name, arguments: args },
     1,
@@ -180,225 +212,381 @@ async function callTool(
 
   expect(payload.error).toBeUndefined();
   expect(payload.result).toBeDefined();
-  return { response, result: payload.result! };
+  return payload.result!;
 }
 
 function errorContent(result: ToolResult): unknown {
   return JSON.parse(result.content?.[0]?.text ?? "null") as unknown;
 }
 
-describe("generic MCP tools", () => {
+describe("source-neutral MCP tools", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it("discovers the three generic tools without creating a session", async () => {
+  it("discovers exactly the five source-neutral tools", async () => {
     const { response, payload } = await sendMcpRequest("tools/list", {}, 1);
 
     expect(response.status).toBe(200);
     expect(response.headers.get("MCP-Session-Id")).toBeNull();
     expect(payload.result?.tools?.map((tool) => tool.name)).toEqual([
-      "search_datasets",
-      "get_dataset",
-      "get_resource",
+      "list_sources",
+      "search_data_by_source",
+      "describe_data_by_id",
+      "query_data_by_id",
+      "get_data_link_by_id",
     ]);
-    expect(payload.result?.tools).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          name: "search_datasets",
-          description: expect.stringContaining(
-            `maximum limit of ${commonMaximumLimit}`,
-          ),
-          inputSchema: expect.objectContaining({
-            type: "object",
-            required: ["source"],
-            properties: expect.objectContaining({
-              limit: expect.objectContaining({
-                type: "integer",
-                minimum: 1,
-                maximum: commonMaximumLimit,
-                description: expect.stringContaining(
-                  `Provider defaults: ${configuredDefaults}`,
-                ),
-              }),
-              offset: expect.objectContaining({
-                type: "integer",
-                minimum: 0,
-                description: expect.any(String),
-              }),
-            }),
-          }),
-        }),
-        expect.objectContaining({
-          name: "get_dataset",
-          description: expect.stringContaining(
-            "other formats remain visible as metadata",
-          ),
-          inputSchema: expect.objectContaining({
-            type: "object",
-            required: ["source", "dataset_id"],
-          }),
-        }),
-        expect.objectContaining({
-          name: "get_resource",
-          description: expect.stringContaining(
-            "does not execute APIs described by OpenAPI",
-          ),
-          inputSchema: expect.objectContaining({
-            type: "object",
-            required: ["source", "dataset_id", "resource_id"],
-            properties: expect.objectContaining({
-              limit: expect.objectContaining({
-                type: "integer",
-                minimum: 1,
-                maximum: commonMaximumLimit,
-                description: expect.stringMatching(
-                  new RegExp(
-                    `pageable resources.*Provider defaults: ${configuredDefaults}`,
-                  ),
-                ),
-              }),
-              offset: expect.objectContaining({
-                type: "integer",
-                minimum: 0,
-                description: expect.stringContaining("pageable resources"),
-              }),
-            }),
-          }),
-        }),
-      ]),
+    const search = payload.result?.tools?.find(
+      (tool) => tool.name === "search_data_by_source",
+    );
+    const query = payload.result?.tools?.find(
+      (tool) => tool.name === "query_data_by_id",
+    );
+    expect(search?.inputSchema.required).toEqual(["source"]);
+    expect(search?.inputSchema.properties).not.toHaveProperty("offset");
+    expect(search?.inputSchema.properties?.limit).toMatchObject({
+      type: "integer",
+      minimum: 1,
+      maximum: commonMaximumLimit,
+    });
+    expect(search?.inputSchema.properties?.cursor).toMatchObject({
+      type: "string",
+      minLength: 1,
+    });
+    expect(query?.inputSchema.required).toEqual([
+      "source",
+      "data_id",
+      "access_id",
+    ]);
+    expect(query?.inputSchema.properties).not.toHaveProperty("offset");
+    expect(query?.inputSchema.properties?.fields).toMatchObject({
+      type: "array",
+      minItems: 1,
+      maxItems: 10,
+    });
+    expect(query?.inputSchema.properties?.spatial).toMatchObject({
+      type: "object",
+    });
+    expect(query?.inputSchema.properties?.time_range).toMatchObject({
+      type: "object",
+    });
+  });
+
+  it("lists configuration-driven source capabilities", async () => {
+    const result = await callTool("list_sources", {});
+
+    expect(result.structuredContent).toEqual({
+      sources: router.listSources(),
+    });
+    expect(result.structuredContent?.sources).toHaveLength(4);
+    expect(result.structuredContent?.sources).toContainEqual(
+      expect.objectContaining({
+        source: "open_meteo_ie",
+        authoritative: false,
+      }),
     );
   });
 
-  it("delegates search_datasets and returns normalized data", async () => {
-    const { result } = await callTool("search_datasets", {
+  it("normalizes search results and continues with an opaque cursor", async () => {
+    const first = await callTool("search_data_by_source", {
       source: "data_gov_ie",
       query: "roads",
-      limit: 5,
-      offset: 0,
+      limit: 1,
     });
 
-    expect(dataGovAdapter.searchDatasets).toHaveBeenCalledWith({
+    expect(dataGovAdapter.searchData).toHaveBeenLastCalledWith({
       query: "roads",
-      limit: 5,
+      limit: 1,
       offset: 0,
     });
-    expect(result.structuredContent).toEqual(searchResult);
+    expect(first.structuredContent).toMatchObject({
+      source: "data_gov_ie",
+      results: [
+        {
+          data_id: "roads",
+          title: "Roads",
+          available_formats: ["json", "xlsx"],
+        },
+      ],
+      returned: 1,
+      total: 2,
+      truncated: true,
+      next_cursor: expect.any(String),
+    });
+    expect(JSON.stringify(first.structuredContent)).not.toContain("dataset_id");
+    expect(JSON.stringify(first.structuredContent)).not.toContain("offset");
+
+    await callTool("search_data_by_source", {
+      source: "data_gov_ie",
+      cursor: first.structuredContent?.next_cursor,
+    });
+    expect(dataGovAdapter.searchData).toHaveBeenLastCalledWith({
+      query: "roads",
+      limit: undefined,
+      offset: 1,
+    });
   });
 
-  it("delegates get_dataset and get_resource", async () => {
-    const datasetResult = await callTool("get_dataset", {
+  it("describes neutral access points with query and link capabilities", async () => {
+    const result = await callTool("describe_data_by_id", {
       source: "smart_dublin",
-      dataset_id: "roads",
+      data_id: "roads",
     });
-    const resourceResult = await callTool("get_resource", {
+
+    expect(smartDublinAdapter.describeData).toHaveBeenCalledWith({
+      data_id: "roads",
+    });
+    expect(result.structuredContent).toMatchObject({
+      data_id: "roads",
+      access_points: [
+        {
+          access_id: "roads-json",
+          format: "json",
+          capabilities: { query: true, link: true },
+        },
+        {
+          access_id: "roads-xlsx",
+          format: "xlsx",
+          capabilities: { query: false, link: true },
+        },
+      ],
+    });
+    expect(JSON.stringify(result.structuredContent)).not.toContain("resource_id");
+    expect(JSON.stringify(result.structuredContent)).not.toContain("supported");
+  });
+
+  it("queries structured data and binds continuation cursors to all IDs", async () => {
+    const first = await callTool("query_data_by_id", {
       source: "data_gov_ie",
-      dataset_id: "roads",
-      resource_id: "roads-json",
+      data_id: "roads",
+      access_id: "roads-json",
+      limit: 1,
+    });
+
+    expect(dataGovAdapter.queryData).toHaveBeenLastCalledWith({
+      data_id: "roads",
+      access_id: "roads-json",
+      limit: 1,
+      offset: 0,
+    });
+    expect(first.structuredContent).toMatchObject({
+      source: "data_gov_ie",
+      data_id: "roads",
+      access_id: "roads-json",
+      data: [{ id: 1 }],
+      pagination_supported: true,
+      returned: 1,
+      total: 2,
+      truncated: true,
+      next_cursor: expect.any(String),
+    });
+
+    await callTool("query_data_by_id", {
+      source: "data_gov_ie",
+      data_id: "roads",
+      access_id: "roads-json",
+      cursor: first.structuredContent?.next_cursor,
+    });
+    expect(dataGovAdapter.queryData).toHaveBeenLastCalledWith({
+      data_id: "roads",
+      access_id: "roads-json",
+      limit: undefined,
+      offset: 1,
+    });
+
+    const mismatched = await callTool("query_data_by_id", {
+      source: "data_gov_ie",
+      data_id: "other",
+      access_id: "roads-json",
+      cursor: first.structuredContent?.next_cursor,
+    });
+    expect(mismatched.isError).toBe(true);
+    expect(errorContent(mismatched)).toEqual({
+      error: "INVALID_REQUEST",
+      message: 'The "cursor" field is invalid or does not match this request.',
+    });
+  });
+
+  it("passes normalized selectors and binds them to continuation cursors", async () => {
+    const first = await callTool("query_data_by_id", {
+      source: "data_gov_ie",
+      data_id: "roads",
+      access_id: "roads-json",
+      fields: [" id ", "name"],
+      spatial: {
+        type: "point",
+        latitude: 53.3498,
+        longitude: -6.2603,
+      },
+      time_range: {
+        start: "2026-10-10T01:00:00+01:00",
+        end: "2026-10-11T01:00:00+01:00",
+      },
+      limit: 1,
+    });
+
+    const selectors = {
+      fields: ["id", "name"],
+      spatial: {
+        type: "point" as const,
+        latitude: 53.3498,
+        longitude: -6.2603,
+      },
+      time_range: {
+        start: "2026-10-10T00:00:00.000Z",
+        end: "2026-10-11T00:00:00.000Z",
+      },
+    };
+    expect(dataGovAdapter.queryData).toHaveBeenLastCalledWith({
+      data_id: "roads",
+      access_id: "roads-json",
+      ...selectors,
       limit: 1,
       offset: 0,
     });
 
-    expect(smartDublinAdapter.getDataset).toHaveBeenCalledWith({
-      dataset_id: "roads",
+    await callTool("query_data_by_id", {
+      source: "data_gov_ie",
+      data_id: "roads",
+      access_id: "roads-json",
+      cursor: first.structuredContent?.next_cursor,
     });
-    expect(dataGovAdapter.getResource).toHaveBeenCalledWith({
-      dataset_id: "roads",
-      resource_id: "roads-json",
-      limit: 1,
-      offset: 0,
+    expect(dataGovAdapter.queryData).toHaveBeenLastCalledWith({
+      data_id: "roads",
+      access_id: "roads-json",
+      ...selectors,
+      limit: undefined,
+      offset: 1,
     });
-    expect(datasetResult.result.structuredContent).toEqual(dataset);
-    expect(resourceResult.result.structuredContent).toEqual(resource);
+
+    const mismatched = await callTool("query_data_by_id", {
+      source: "data_gov_ie",
+      data_id: "roads",
+      access_id: "roads-json",
+      fields: ["name"],
+      cursor: first.structuredContent?.next_cursor,
+    });
+    expect(errorContent(mismatched)).toEqual({
+      error: "INVALID_REQUEST",
+      message: 'The "cursor" field is invalid or does not match this request.',
+    });
+  });
+
+  it("returns an MCP resource link without querying the resource", async () => {
+    const result = await callTool("get_data_link_by_id", {
+      source: "data_gov_ie",
+      data_id: "roads",
+      access_id: "roads-xlsx",
+    });
+
+    expect(dataGovAdapter.getDataLink).toHaveBeenCalledWith({
+      data_id: "roads",
+      access_id: "roads-xlsx",
+    });
+    expect(dataGovAdapter.queryData).not.toHaveBeenCalled();
+    expect(result.structuredContent).toEqual(dataLink);
+    expect(result.content?.[1]).toMatchObject({
+      type: "resource_link",
+      uri: dataLink.url,
+      name: "roads.xlsx",
+      title: "Road workbook",
+      size: 1234,
+    });
   });
 
   it("serializes source and capability errors", async () => {
-    const invalidSource = await callTool("get_dataset", {
+    const invalidSource = await callTool("describe_data_by_id", {
       source: "unknown",
-      dataset_id: "roads",
+      data_id: "roads",
     });
-    const unsupported = await callTool("get_resource", {
+    const unsupported = await callTool("query_data_by_id", {
       source: "met_eireann",
-      dataset_id: "roads",
-      resource_id: "roads-json",
+      data_id: "roads",
+      access_id: "roads-json",
     });
 
-    expect(invalidSource.result.isError).toBe(true);
-    expect(errorContent(invalidSource.result)).toEqual({
+    expect(errorContent(invalidSource)).toEqual({
       error: "INVALID_SOURCE",
       message: "The requested source is not supported.",
     });
-    expect(unsupported.result.isError).toBe(true);
-    expect(errorContent(unsupported.result)).toEqual({
+    expect(errorContent(unsupported)).toEqual({
       error: "UNSUPPORTED_OPERATION",
       message: "The requested operation is not supported by this source.",
     });
   });
 
-  it("returns field-specific INVALID_REQUEST errors before calling an adapter", async () => {
-    const invalidSearch = await callTool("search_datasets", {
+  it("returns field-specific validation and malformed-cursor errors", async () => {
+    const invalidLimit = await callTool("search_data_by_source", {
       source: "data_gov_ie",
-      limit: 0,
-    });
-    const invalidDataset = await callTool("get_dataset", {
-      source: "data_gov_ie",
-      dataset_id: "",
-    });
-    const invalidResource = await callTool("get_resource", {
-      source: "data_gov_ie",
-      dataset_id: "roads",
-      resource_id: "",
-    });
-    const missingDataset = await callTool("get_resource", {
-      source: "data_gov_ie",
-      resource_id: "roads-json",
-    });
-    const excessiveLimit = await callTool("get_resource", {
-      source: "data_gov_ie",
-      dataset_id: "roads",
-      resource_id: "roads-json",
       limit: commonMaximumLimit + 1,
     });
-    const negativeOffset = await callTool("search_datasets", {
+    const missingData = await callTool("query_data_by_id", {
       source: "data_gov_ie",
-      offset: -1,
+      access_id: "roads-json",
+    });
+    const missingAccess = await callTool("get_data_link_by_id", {
+      source: "data_gov_ie",
+      data_id: "roads",
+    });
+    const invalidCursor = await callTool("query_data_by_id", {
+      source: "data_gov_ie",
+      data_id: "roads",
+      access_id: "roads-json",
+      cursor: "not-a-valid-cursor",
+    });
+    const duplicateFields = await callTool("query_data_by_id", {
+      source: "data_gov_ie",
+      data_id: "roads",
+      access_id: "roads-json",
+      fields: ["id", " id "],
+    });
+    const invalidSpatial = await callTool("query_data_by_id", {
+      source: "data_gov_ie",
+      data_id: "roads",
+      access_id: "roads-json",
+      spatial: { type: "point", latitude: 91, longitude: -6 },
+    });
+    const invalidTimeRange = await callTool("query_data_by_id", {
+      source: "data_gov_ie",
+      data_id: "roads",
+      access_id: "roads-json",
+      time_range: {
+        start: "2026-10-11T00:00:00Z",
+        end: "2026-10-10T00:00:00Z",
+      },
     });
 
-    expect(invalidSearch.result.isError).toBe(true);
-    expect(invalidDataset.result.isError).toBe(true);
-    expect(invalidResource.result.isError).toBe(true);
-    expect(missingDataset.result.isError).toBe(true);
-    expect(excessiveLimit.result.isError).toBe(true);
-    expect(negativeOffset.result.isError).toBe(true);
-    expect(errorContent(invalidSearch.result)).toEqual({
+    expect(errorContent(invalidLimit)).toEqual({
       error: "INVALID_REQUEST",
       message: `The "limit" field must be an integer between 1 and ${commonMaximumLimit}.`,
     });
-    expect(errorContent(invalidDataset.result)).toEqual({
+    expect(errorContent(missingData)).toEqual({
+      error: "INVALID_REQUEST",
+      message: 'The "data_id" field is required and must be a non-empty string.',
+    });
+    expect(errorContent(missingAccess)).toEqual({
       error: "INVALID_REQUEST",
       message:
-        'The "dataset_id" field is required and must be a non-empty string.',
+        'The "access_id" field is required and must be a non-empty string.',
     });
-    expect(errorContent(invalidResource.result)).toEqual({
+    expect(errorContent(invalidCursor)).toEqual({
+      error: "INVALID_REQUEST",
+      message: 'The "cursor" field is invalid or does not match this request.',
+    });
+    expect(errorContent(duplicateFields)).toEqual({
       error: "INVALID_REQUEST",
       message:
-        'The "resource_id" field is required and must be a non-empty string.',
+        'The "fields" field must contain 1 to 10 unique, non-empty strings.',
     });
-    expect(errorContent(missingDataset.result)).toEqual({
+    expect(errorContent(invalidSpatial)).toEqual({
       error: "INVALID_REQUEST",
       message:
-        'The "dataset_id" field is required and must be a non-empty string.',
+        'The "spatial" field must be a point with finite latitude (-90 to 90) and longitude (-180 to 180).',
     });
-    expect(errorContent(excessiveLimit.result)).toEqual({
+    expect(errorContent(invalidTimeRange)).toEqual({
       error: "INVALID_REQUEST",
-      message: `The "limit" field must be an integer between 1 and ${commonMaximumLimit}.`,
+      message:
+        'The "time_range" field must contain RFC3339 start and end timestamps, with end after start.',
     });
-    expect(errorContent(negativeOffset.result)).toEqual({
-      error: "INVALID_REQUEST",
-      message: 'The "offset" field must be a non-negative integer.',
-    });
-    expect(dataGovAdapter.searchDatasets).not.toHaveBeenCalled();
-    expect(dataGovAdapter.getDataset).not.toHaveBeenCalled();
-    expect(dataGovAdapter.getResource).not.toHaveBeenCalled();
   });
 });

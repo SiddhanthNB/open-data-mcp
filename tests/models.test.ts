@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { isSource, PROVIDER_OPERATIONS, SOURCES } from "../src/models";
+import {
+  isSource,
+  PROVIDER_OPERATIONS,
+  SOURCES,
+  type QuerySelectors,
+} from "../src/models";
 
 describe("shared models", () => {
   it("defines the fixed sources", () => {
@@ -8,16 +13,32 @@ describe("shared models", () => {
       "data_gov_ie",
       "smart_dublin",
       "met_eireann",
+      "open_meteo_ie",
     ]);
     expect(isSource("smart_dublin")).toBe(true);
     expect(isSource("unknown")).toBe(false);
+    expect(isSource("open_meteo_ie")).toBe(true);
   });
 
   it("defines the generic provider operations", () => {
     expect(PROVIDER_OPERATIONS).toEqual([
-      "search_datasets",
-      "get_dataset",
-      "get_resource",
+      "search_data_by_source",
+      "describe_data_by_id",
+      "query_data_by_id",
+      "get_data_link_by_id",
     ]);
+  });
+
+  it("defines source-neutral query selectors", () => {
+    const selectors: QuerySelectors = {
+      fields: ["temperature_2m"],
+      spatial: { type: "point", latitude: 53.35, longitude: -6.26 },
+      time_range: {
+        start: "2026-10-10T00:00:00.000Z",
+        end: "2026-10-11T00:00:00.000Z",
+      },
+    };
+
+    expect(selectors.spatial?.type).toBe("point");
   });
 });

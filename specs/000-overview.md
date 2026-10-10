@@ -15,10 +15,10 @@ The server does not analyse, interpret, rank, recommend, or derive insights from
 
 Provide MCP-compatible applications with a simple way to:
 
-- discover Irish public datasets
-- inspect dataset metadata
-- retrieve dataset resources
-- query supported public resources
+- discover Irish public data
+- inspect data metadata and access points
+- query supported access points
+- obtain browser-openable links to catalogued data
 - access multiple Irish open-data providers through one MCP interface
 
 The project is Ireland-specific.
@@ -34,13 +34,19 @@ Any MCP-compatible client should be able to connect.
 
 ## Initial Data Sources
 
-The initial supported providers are:
+The supported providers are:
 
 - `data_gov_ie`
 - `smart_dublin`
 - `met_eireann`
+- `open_meteo_ie`
 
 Additional Irish public-data providers may be added later.
+
+`met_eireann` is the authoritative Irish weather source. `open_meteo_ie` is a
+non-authoritative ECMWF IFS model-forecast source restricted to point queries
+inside the Republic of Ireland. The two sources remain separate and their data
+must not be silently merged.
 
 ## Core Principles
 
@@ -68,11 +74,11 @@ Provider selection and querying are controlled through parameters such as:
 
 - `source`
 - query keywords
-- dataset identifiers
-- resource identifiers
-- filters
+- data identifiers
+- access identifiers
 - limits
-- pagination
+- opaque cursors
+- optional field, point, and time-range selectors where a source supports them
 
 Provider-specific MCP tools must not be exposed.
 

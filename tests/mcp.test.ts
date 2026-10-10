@@ -72,7 +72,7 @@ async function sendMcpRequest(
 }
 
 describe("stateless MCP Worker", () => {
-  it("initializes and exposes exactly the three generic tools without a session", async () => {
+  it("initializes and exposes exactly the five generic tools without a session", async () => {
     const initialized = await sendMcpRequest(
       "initialize",
       {
@@ -94,39 +94,35 @@ describe("stateless MCP Worker", () => {
     expect(listed.response.headers.get("MCP-Session-Id")).toBeNull();
     expect(listed.payload.error).toBeUndefined();
     expect(listed.payload.result?.tools?.map((tool) => tool.name)).toEqual([
-      "search_datasets",
-      "get_dataset",
-      "get_resource",
+      "list_sources",
+      "search_data_by_source",
+      "describe_data_by_id",
+      "query_data_by_id",
+      "get_data_link_by_id",
     ]);
     const searchTool = listed.payload.result?.tools?.find(
-      (tool) => tool.name === "search_datasets",
+      (tool) => tool.name === "search_data_by_source",
     );
     const resourceTool = listed.payload.result?.tools?.find(
-      (tool) => tool.name === "get_resource",
+      (tool) => tool.name === "query_data_by_id",
     );
     expect(searchTool?.inputSchema?.properties?.limit).toMatchObject({
       type: "integer",
       minimum: 1,
       maximum: 100,
     });
-    expect(searchTool?.inputSchema?.properties?.offset).toMatchObject({
-      type: "integer",
-      minimum: 0,
-    });
+    expect(searchTool?.inputSchema?.properties).not.toHaveProperty("offset");
     expect(resourceTool?.inputSchema?.required).toEqual([
       "source",
-      "dataset_id",
-      "resource_id",
+      "data_id",
+      "access_id",
     ]);
     expect(resourceTool?.inputSchema?.properties?.limit).toMatchObject({
       type: "integer",
       minimum: 1,
       maximum: 100,
     });
-    expect(resourceTool?.inputSchema?.properties?.offset).toMatchObject({
-      type: "integer",
-      minimum: 0,
-    });
+    expect(resourceTool?.inputSchema?.properties).not.toHaveProperty("offset");
   });
 
   it("routes a real tool call through the adapter and direct resource loader", async () => {
@@ -163,27 +159,45 @@ describe("stateless MCP Worker", () => {
       authConfig: anonymousAuthConfig,
     });
 
-    const { response, payload } = await sendMcpRequest(
+    const first = await sendMcpRequest(
       "tools/call",
       {
-        name: "get_resource",
+        name: "query_data_by_id",
         arguments: {
           source: "data_gov_ie",
-          dataset_id: "roads",
-          resource_id: "roads-json",
+          data_id: "roads",
+          access_id: "roads-json",
           limit: 1,
-          offset: 1,
         },
       },
       3,
+      worker,
+    );
+    const cursor = first.payload.result?.structuredContent?.next_cursor;
+    expect(cursor).toEqual(expect.any(String));
+
+    const { response, payload } = await sendMcpRequest(
+      "tools/call",
+      {
+        name: "query_data_by_id",
+        arguments: {
+          source: "data_gov_ie",
+          data_id: "roads",
+          access_id: "roads-json",
+          limit: 1,
+          cursor,
+        },
+      },
+      4,
       worker,
     );
 
     expect(response.headers.get("MCP-Session-Id")).toBeNull();
     expect(payload.error).toBeUndefined();
     expect(payload.result?.structuredContent).toEqual({
-      dataset_id: "roads",
-      resource_id: "roads-json",
+      source: "data_gov_ie",
+      data_id: "roads",
+      access_id: "roads-json",
       data: [{ id: 2 }],
       provenance: {
         source: "data_gov_ie",
@@ -192,9 +206,11 @@ describe("stateless MCP Worker", () => {
         original_format: "json",
       },
       pagination_supported: true,
-      pagination: { limit: 1, offset: 1, returned: 1, total: 2 },
+      returned: 1,
+      total: 2,
+      truncated: false,
     });
-    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(fetcher).toHaveBeenCalledTimes(4);
   });
 
   it("keeps unrelated routes outside the production auth and MCP endpoints", async () => {

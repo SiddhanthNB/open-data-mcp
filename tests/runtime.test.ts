@@ -8,6 +8,7 @@ import type {
   ResourceLoader,
 } from "../src/providers/ckan/index";
 import { MetEireannAdapter } from "../src/providers/met-eireann";
+import { OpenMeteoAdapter } from "../src/providers/open-meteo";
 import { SmartDublinAdapter } from "../src/providers/smart-dublin";
 import { createSourceRouter, type RuntimeDependencies } from "../src/runtime";
 
@@ -25,7 +26,7 @@ function idleLoader(): ResourceLoader {
 }
 
 describe("runtime composition", () => {
-  it("registers every configured operation for all three named adapters", () => {
+  it("registers configured operations for all four named adapters", () => {
     const router = createSourceRouter({
       resourceLoader: idleLoader(),
       ...RESOURCE_LIMITS,
@@ -34,15 +35,20 @@ describe("runtime composition", () => {
       data_gov_ie: DataGovAdapter,
       smart_dublin: SmartDublinAdapter,
       met_eireann: MetEireannAdapter,
+      open_meteo_ie: OpenMeteoAdapter,
     } as const;
 
     for (const source of SOURCES) {
-      const adapter = router.resolve(source, "search_datasets");
+      const adapter = router.resolve(source, "search_data_by_source");
       expect(adapter).toBeInstanceOf(expectedAdapters[source]);
       expect(adapter.config).toBe(providerConfigs[source]);
 
       for (const operation of PROVIDER_OPERATIONS) {
-        expect(router.resolve(source, operation)).toBe(adapter);
+        if (providerConfigs[source].capabilities[operation]) {
+          expect(router.resolve(source, operation)).toBe(adapter);
+        } else {
+          expect(() => router.resolve(source, operation)).toThrow();
+        }
       }
     }
   });
@@ -54,11 +60,47 @@ describe("runtime composition", () => {
     });
 
     expect(
-      router.resolve("met_eireann", "search_datasets").config.scope,
+      router.resolve("met_eireann", "search_data_by_source").config.scope,
     ).toEqual({
       organization_name: "meteireann",
       organization_id: "met-eireann",
     });
+  });
+
+  it("keeps forecast settings configuration-driven", () => {
+    const router = createSourceRouter({
+      resourceLoader: idleLoader(),
+      ...RESOURCE_LIMITS,
+    });
+
+    const met = router.resolve("met_eireann", "query_data_by_id");
+    const openMeteo = router.resolve("open_meteo_ie", "query_data_by_id");
+
+    expect(met.config.forecast).toEqual(providerConfigs.met_eireann.forecast);
+    expect(openMeteo.config).toBe(providerConfigs.open_meteo_ie);
+    expect(openMeteo.config).toMatchObject({
+      type: "forecast_api",
+      authoritative: false,
+      forecast: {
+        endpoint: "https://api.open-meteo.com/v1/forecast",
+        model: "ecmwf_ifs",
+      },
+    });
+    expect(router.listSources()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source: "met_eireann",
+          authoritative: true,
+          coverage: "Republic of Ireland",
+        }),
+        expect.objectContaining({
+          source: "open_meteo_ie",
+          type: "forecast_api",
+          authoritative: false,
+          coverage: "Republic of Ireland point queries only",
+        }),
+      ]),
+    );
   });
 
   it("injects fetch, resource loader, and clock dependencies", async () => {
@@ -106,10 +148,10 @@ describe("runtime composition", () => {
     });
 
     const result = await router
-      .resolve("data_gov_ie", "get_resource")
-      .getResource({
-        dataset_id: "dataset-1",
-        resource_id: "resource-1",
+      .resolve("data_gov_ie", "query_data_by_id")
+      .queryData({
+        data_id: "dataset-1",
+        access_id: "resource-1",
         limit: 3,
         offset: 2,
       });
@@ -145,7 +187,7 @@ describe("runtime composition", () => {
     });
 
     await expect(
-      router.resolve("data_gov_ie", "search_datasets").searchDatasets({}),
+      router.resolve("data_gov_ie", "search_data_by_source").searchData({}),
     ).rejects.toMatchObject({ code: "RESOURCE_TOO_LARGE" });
   });
 

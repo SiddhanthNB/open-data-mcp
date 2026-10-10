@@ -15,6 +15,7 @@ function receiverCheckingFetch(response: () => Response): typeof fetch {
 
 const config: ProviderConfig = {
   provider: "data_gov_ie",
+  type: "catalogue",
   base_url: "https://catalogue.example.test",
   endpoints: {
     package_search: "/api/3/action/package_search",
@@ -24,9 +25,10 @@ const config: ProviderConfig = {
   http_timeout_ms: 1_000,
   pagination: { default_limit: 10, max_limit: 100 },
   capabilities: {
-    search_datasets: true,
-    get_dataset: true,
-    get_resource: true,
+    search_data_by_source: true,
+    describe_data_by_id: true,
+    query_data_by_id: true,
+    get_data_link_by_id: true,
   },
   formats: ["json"],
 };

@@ -1,12 +1,29 @@
 import {
   McpServer,
   type CallToolResult,
+  type ResourceLink,
   type StandardSchemaWithJSON,
 } from "@modelcontextprotocol/server";
 import { z } from "zod";
 
-import { providerConfigs } from "../config";
+import { providerConfigs, serverConfig } from "../config";
+import {
+  decodeQueryCursor,
+  decodeSearchCursor,
+  encodeQueryCursor,
+  encodeSearchCursor,
+  MAX_CURSOR_LENGTH,
+} from "../cursor";
 import { AppError } from "../errors";
+import { linkName } from "../links";
+import type {
+  DataLink,
+  DataSearchResult,
+  QuerySelectors,
+  QueryDataResult,
+  Source,
+} from "../models";
+import { enforceSerializedSize } from "../resources/limits";
 import type { SourceRouter } from "../router";
 
 const configuredProviders = Object.values(providerConfigs);
@@ -14,61 +31,85 @@ const commonMaximumLimit = Math.min(
   ...configuredProviders.map((config) => config.pagination.max_limit),
 );
 const configuredDefaults = configuredProviders
-  .map(
-    (config) =>
-      `${config.provider}=${config.pagination.default_limit}`,
-  )
+  .map((config) => `${config.provider}=${config.pagination.default_limit}`)
   .join(", ");
 const limitRange = `integer from 1 to ${commonMaximumLimit}`;
 const defaultLimitDescription = `Provider defaults: ${configuredDefaults}.`;
+const maxFields = 10;
 
 const source = z
   .string()
   .min(1)
   .describe(
-    "One catalogue: data_gov_ie (national), smart_dublin (Smart Dublin), or met_eireann (Met Eireann publisher subset of data.gov.ie).",
+    "One source listed by list_sources, currently data_gov_ie, smart_dublin, met_eireann, or open_meteo_ie.",
   );
-const searchLimit = z
+const limit = z
   .number()
   .int()
   .min(1)
   .max(commonMaximumLimit)
   .optional()
-  .describe(
-    `Search results to return: ${limitRange}. ${defaultLimitDescription}`,
-  );
-const searchOffset = z
-  .number()
-  .int()
-  .nonnegative()
-  .optional()
-  .describe("Search results to skip: non-negative integer.");
-const resourceLimit = z
-  .number()
-  .int()
+  .describe(`Items to return: ${limitRange}. ${defaultLimitDescription}`);
+const cursor = z
+  .string()
   .min(1)
-  .max(commonMaximumLimit)
+  .max(MAX_CURSOR_LENGTH)
   .optional()
-  .describe(
-    `Rows or array items to return: ${limitRange}; only applies to pageable resources. ${defaultLimitDescription}`,
-  );
-const resourceOffset = z
-  .number()
-  .int()
-  .nonnegative()
+  .describe("Opaque continuation cursor returned by the same tool.");
+const dataId = z
+  .string()
+  .min(1)
+  .describe("Source data ID returned by search_data_by_source.");
+const accessId = z
+  .string()
+  .min(1)
+  .describe("Access ID returned by describe_data_by_id for this data ID.");
+const fields = z
+  .array(z.string().trim().min(1))
+  .min(1)
+  .max(maxFields)
+  .refine((values) => new Set(values).size === values.length)
   .optional()
-  .describe(
-    "Rows or array items to skip: non-negative integer; only applies to pageable resources.",
-  );
+  .describe(`Optional unique field names to return; maximum ${maxFields}.`);
+const spatial = z
+  .object({
+    type: z.literal("point"),
+    latitude: z.number().finite().min(-90).max(90),
+    longitude: z.number().finite().min(-180).max(180),
+  })
+  .strict()
+  .optional()
+  .describe("Optional WGS84 point coordinates for spatial data sources.");
+const rfc3339 = z.iso.datetime({ offset: true });
+const timeRange = z
+  .object({
+    start: rfc3339,
+    end: rfc3339,
+  })
+  .strict()
+  .refine((value) => Date.parse(value.end) > Date.parse(value.start), {
+    path: ["end"],
+  })
+  .transform((value) => ({
+    start: new Date(value.start).toISOString(),
+    end: new Date(value.end).toISOString(),
+  }))
+  .optional()
+  .describe("Optional bounded RFC3339 time range; end must be after start.");
 
 const validationMessages: Readonly<Record<string, string>> = {
   source: 'The "source" field must be a non-empty string.',
   query: 'The "query" field must be a string.',
   limit: `The "limit" field must be an integer between 1 and ${commonMaximumLimit}.`,
-  offset: 'The "offset" field must be a non-negative integer.',
-  dataset_id: 'The "dataset_id" field is required and must be a non-empty string.',
-  resource_id:
-    'The "resource_id" field is required and must be a non-empty string.',
+  cursor: 'The "cursor" field must be a valid non-empty cursor.',
+  data_id: 'The "data_id" field is required and must be a non-empty string.',
+  access_id:
+    'The "access_id" field is required and must be a non-empty string.',
+  fields: `The "fields" field must contain 1 to ${maxFields} unique, non-empty strings.`,
+  spatial:
+    'The "spatial" field must be a point with finite latitude (-90 to 90) and longitude (-180 to 180).',
+  time_range:
+    'The "time_range" field must contain RFC3339 start and end timestamps, with end after start.',
 };
 
 function validationMessage(error: z.ZodError): string {
@@ -104,6 +145,25 @@ function toolResult(value: object): CallToolResult {
   };
 }
 
+function linkToolResult(value: DataLink): CallToolResult {
+  const resourceLink: ResourceLink = {
+    type: "resource_link",
+    uri: value.url,
+    name: linkName(value.url, value.access_id),
+    ...(value.title ? { title: value.title } : {}),
+    ...(value.description ? { description: value.description } : {}),
+    ...(value.size !== undefined ? { size: value.size } : {}),
+  };
+
+  return {
+    content: [
+      { type: "text", text: JSON.stringify(value) },
+      resourceLink,
+    ],
+    structuredContent: value as unknown as Record<string, unknown>,
+  };
+}
+
 function toolError(error: unknown): CallToolResult {
   const appError =
     error instanceof AppError ? error : new AppError("UPSTREAM_ERROR");
@@ -118,6 +178,18 @@ function toolError(error: unknown): CallToolResult {
 async function execute(operation: () => Promise<object>): Promise<CallToolResult> {
   try {
     return toolResult(await operation());
+  } catch (error) {
+    return toolError(error);
+  }
+}
+
+async function executeLink(
+  operation: () => Promise<DataLink>,
+): Promise<CallToolResult> {
+  try {
+    const value = await operation();
+    enforceSerializedSize(value, serverConfig.resources.max_output_bytes);
+    return linkToolResult(value);
   } catch (error) {
     return toolError(error);
   }
@@ -138,76 +210,253 @@ async function executeValidated<T>(
   return execute(() => operation(parsed.data));
 }
 
+async function executeValidatedLink<T>(
+  schema: z.ZodType<T>,
+  input: unknown,
+  operation: (input: T) => Promise<DataLink>,
+): Promise<CallToolResult> {
+  const parsed = schema.safeParse(input);
+  if (!parsed.success) {
+    return toolError(
+      new AppError("INVALID_REQUEST", validationMessage(parsed.error)),
+    );
+  }
+
+  return executeLink(() => operation(parsed.data));
+}
+
 export function registerTools(server: McpServer, router: SourceRouter): void {
-  const searchDatasetsInput = z
+  const listSourcesInput = z.object({}).strict();
+  const searchDataInput = z
     .object({
       source,
       query: z.string().optional().describe("Optional upstream keyword query."),
-      limit: searchLimit,
-      offset: searchOffset,
+      limit,
+      cursor,
     })
     .strict();
-  const getDatasetInput = z
+  const describeDataInput = z
     .object({
       source,
-      dataset_id: z
-        .string()
-        .min(1)
-        .describe("Catalogue dataset ID returned by search_datasets."),
+      data_id: dataId,
     })
     .strict();
-  const getResourceInput = z
+  const queryDataInput = z
     .object({
       source,
-      dataset_id: z
-        .string()
-        .min(1)
-        .describe("Catalogue dataset ID returned by search_datasets."),
-      resource_id: z
-        .string()
-        .min(1)
-        .describe("Resource ID returned in the matching get_dataset response."),
-      limit: resourceLimit,
-      offset: resourceOffset,
+      data_id: dataId,
+      access_id: accessId,
+      fields,
+      spatial,
+      time_range: timeRange,
+      limit,
+      cursor,
+    })
+    .strict();
+  const getDataLinkInput = z
+    .object({
+      source,
+      data_id: dataId,
+      access_id: accessId,
     })
     .strict();
 
   server.registerTool(
-    "search_datasets",
+    "list_sources",
     {
       description:
-        `Search one catalogue: data_gov_ie is the national catalogue, smart_dublin is the Smart Dublin catalogue, and met_eireann is the Met Eireann publisher subset of data.gov.ie. Results may overlap because catalogues harvest the same dataset; source selects the upstream representation. Use returned dataset_id values with get_dataset. limit and offset paginate results, with a maximum limit of ${commonMaximumLimit}. ${defaultLimitDescription} Reported formats are catalogue metadata; get_resource retrieves direct CSV, JSON, XML, and CKAN DataStore-backed resources.`,
-      inputSchema: advertisedSchema(searchDatasetsInput),
+        "List configured Irish public-data and Ireland-scoped sources with their type, authority status, geographic coverage, enabled capabilities, queryable formats, and configured limits.",
+      inputSchema: advertisedSchema(listSourcesInput),
     },
     async (input) =>
-      executeValidated(searchDatasetsInput, input, ({ source, ...request }) =>
-        router.resolve(source, "search_datasets").searchDatasets(request),
+      executeValidated(listSourcesInput, input, async () => ({
+        sources: router.listSources(),
+      })),
+  );
+
+  server.registerTool(
+    "search_data_by_source",
+    {
+      description:
+        `Search one source and return source-neutral data_id values. Results may overlap between catalogues because source selects the upstream representation. Use next_cursor to continue without handling provider offsets. Maximum limit: ${commonMaximumLimit}. ${defaultLimitDescription}`,
+      inputSchema: advertisedSchema(searchDataInput),
+    },
+    async (input) =>
+      executeValidated(
+        searchDataInput,
+        input,
+        async ({ source: requestedSource, query, limit, cursor }) => {
+          const adapter = router.resolve(
+            requestedSource,
+            "search_data_by_source",
+          );
+          const source = adapter.config.provider;
+          const continuation = decodeSearchCursor(cursor, source, query);
+          const result = await adapter.searchData({
+            query: continuation.query,
+            limit,
+            offset: continuation.offset,
+          });
+          return searchResponse(source, continuation.query, result);
+        },
       ),
   );
 
   server.registerTool(
-    "get_dataset",
+    "describe_data_by_id",
     {
       description:
-        "Get dataset metadata from one catalogue: data_gov_ie is national, smart_dublin is Smart Dublin, and met_eireann is the Met Eireann publisher subset of data.gov.ie. Use a dataset_id returned by search_datasets. The resource list supplies resource_id values for get_resource and marks whether each catalogue resource is supported. Direct CSV, JSON, XML, and CKAN DataStore-backed resources are retrievable; other formats remain visible as metadata.",
-      inputSchema: advertisedSchema(getDatasetInput),
+        "Describe one logical data object. Use a data_id from search_data_by_source. Access points expose independent query and link capabilities; unsupported query formats remain discoverable.",
+      inputSchema: advertisedSchema(describeDataInput),
     },
     async (input) =>
-      executeValidated(getDatasetInput, input, ({ source, ...request }) =>
-        router.resolve(source, "get_dataset").getDataset(request),
+      executeValidated(
+        describeDataInput,
+        input,
+        async ({ source, data_id }) => {
+          const adapter = router.resolve(source, "describe_data_by_id");
+          return adapter.describeData({ data_id });
+        },
       ),
   );
 
   server.registerTool(
-    "get_resource",
+    "query_data_by_id",
     {
       description:
-        `Fetch a catalogue resource from one source: data_gov_ie is national, smart_dublin is Smart Dublin, and met_eireann is the Met Eireann publisher subset of data.gov.ie. Pass the matching dataset_id and resource_id returned by get_dataset. Retrieves direct CSV, JSON, XML, or CKAN DataStore-backed resources. It fetches the resource linked by the catalogue; it does not execute APIs described by OpenAPI or other documents. limit and offset apply only to tabular data and JSON arrays, with a maximum limit of ${commonMaximumLimit}. ${defaultLimitDescription} Pagination is omitted when not applicable, and total is optional when an upstream or bounded response cannot provide it.`,
-      inputSchema: advertisedSchema(getResourceInput),
+        `Return bounded structured data from one access point. Pass source, data_id, and access_id from describe_data_by_id. Sources may support optional field selection, point coordinates, and a bounded time range. Direct CSV, JSON, XML, and CKAN DataStore-backed access points are queryable. This tool never executes APIs described by OpenAPI documents. Use next_cursor to continue pageable data. Maximum limit: ${commonMaximumLimit}. ${defaultLimitDescription}`,
+      inputSchema: advertisedSchema(queryDataInput),
     },
     async (input) =>
-      executeValidated(getResourceInput, input, ({ source, ...request }) =>
-        router.resolve(source, "get_resource").getResource(request),
+      executeValidated(
+        queryDataInput,
+        input,
+        async ({
+          source: requestedSource,
+          data_id,
+          access_id,
+          fields,
+          spatial,
+          time_range,
+          limit,
+          cursor,
+        }) => {
+          const adapter = router.resolve(requestedSource, "query_data_by_id");
+          const source = adapter.config.provider;
+          const continuation = decodeQueryCursor(
+            cursor,
+            source,
+            data_id,
+            access_id,
+            { fields, spatial, time_range },
+          );
+          const result = await adapter.queryData({
+            data_id,
+            access_id,
+            ...continuation.selectors,
+            limit,
+            offset: continuation.offset,
+          });
+          const response = queryResponse(
+            source,
+            data_id,
+            access_id,
+            result,
+            continuation.selectors,
+          );
+          enforceSerializedSize(
+            response,
+            serverConfig.resources.max_output_bytes,
+          );
+          return response;
+        },
       ),
   );
+
+  server.registerTool(
+    "get_data_link_by_id",
+    {
+      description:
+        "Return metadata plus a clickable MCP resource_link for a catalogued access point. The tool does not fetch, stream, parse, or preview the linked bytes and accepts no arbitrary URL.",
+      inputSchema: advertisedSchema(getDataLinkInput),
+    },
+    async (input) =>
+      executeValidatedLink(
+        getDataLinkInput,
+        input,
+        async ({ source, data_id, access_id }) => {
+          const adapter = router.resolve(source, "get_data_link_by_id");
+          return adapter.getDataLink({
+            data_id,
+            access_id,
+          });
+        },
+      ),
+  );
+}
+
+function searchResponse(
+  source: Source,
+  query: string,
+  result: DataSearchResult,
+): object {
+  const { pagination } = result;
+  const hasMore =
+    pagination.returned > 0 &&
+    (pagination.total !== undefined
+      ? pagination.offset + pagination.returned < pagination.total
+      : pagination.returned === pagination.limit);
+  const nextOffset = pagination.offset + pagination.returned;
+
+  return {
+    source,
+    results: result.results,
+    returned: pagination.returned,
+    ...(pagination.total !== undefined ? { total: pagination.total } : {}),
+    truncated: hasMore,
+    ...(hasMore
+      ? { next_cursor: encodeSearchCursor(source, query, nextOffset) }
+      : {}),
+  };
+}
+
+function queryResponse(
+  source: Source,
+  dataId: string,
+  accessId: string,
+  result: QueryDataResult,
+  selectors: QuerySelectors,
+): object {
+  const page = result.pagination;
+  const hasMore =
+    result.pagination_supported &&
+    page !== undefined &&
+    page.returned > 0 &&
+    (page.total !== undefined
+      ? page.offset + page.returned < page.total
+      : page.returned === page.limit);
+  const nextOffset = page ? page.offset + page.returned : 0;
+
+  return {
+    source,
+    data_id: dataId,
+    access_id: accessId,
+    data: result.data,
+    provenance: result.provenance,
+    pagination_supported: result.pagination_supported,
+    ...(page ? { returned: page.returned } : {}),
+    ...(page?.total !== undefined ? { total: page.total } : {}),
+    truncated: hasMore,
+    ...(hasMore
+      ? {
+          next_cursor: encodeQueryCursor(
+            source,
+            dataId,
+            accessId,
+            nextOffset,
+            selectors,
+          ),
+        }
+      : {}),
+  };
 }

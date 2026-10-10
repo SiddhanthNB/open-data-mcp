@@ -1,0 +1,52 @@
+provider: open_meteo_ie
+type: forecast_api
+authoritative: false
+coverage: Republic of Ireland point queries only
+description: Non-authoritative ECMWF IFS model forecasts delivered by Open-Meteo.
+base_url: https://api.open-meteo.com
+endpoints:
+  forecast: /v1/forecast
+http_timeout_ms: 10000
+pagination:
+  default_limit: 24
+  max_limit: 100
+capabilities:
+  search_data_by_source: true
+  describe_data_by_id: true
+  query_data_by_id: true
+  get_data_link_by_id: false
+formats:
+  - json
+forecast:
+  data_id: weather_forecast
+  access_id: hourly_forecast
+  endpoint: https://api.open-meteo.com/v1/forecast
+  model: ecmwf_ifs
+  horizon_days: 15
+  allowed_hourly_fields:
+    - temperature_2m
+    - relative_humidity_2m
+    - apparent_temperature
+    - precipitation
+    - rain
+    - showers
+    - snowfall
+    - weather_code
+    - pressure_msl
+    - cloud_cover
+    - visibility
+    - wind_speed_10m
+    - wind_direction_10m
+    - wind_gusts_10m
+  max_fields: 10
+  timezone: GMT
+  timeformat: iso8601
+  temperature_unit: celsius
+  wind_speed_unit: kmh
+  precipitation_unit: mm
+  cell_selection: land
+  attribution:
+    provider: Open-Meteo
+    weather_model: ECMWF IFS HRES 9 km
+    licence: CC BY 4.0
+    url: https://open-meteo.com/

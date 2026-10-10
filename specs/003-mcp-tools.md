@@ -2,126 +2,161 @@
 
 ## Overview
 
-Ireland Open Data MCP exposes a small generic toolset.
+Ireland Open Data MCP exposes exactly five provider-independent tools:
 
-The tools are provider-independent.
+1. `list_sources`
+2. `search_data_by_source`
+3. `describe_data_by_id`
+4. `query_data_by_id`
+5. `get_data_link_by_id`
 
 Supported sources:
 
 - `data_gov_ie`
 - `smart_dublin`
 - `met_eireann`
+- `open_meteo_ie`
 
-The MCP layer must not expose provider-specific tools.
+The public transport is stateless Streamable HTTP at `/mcp`. Each request
+receives a fresh server instance and must not depend on in-memory session state.
 
-The tools are registered on the official MCP TypeScript server and exposed through the Cloudflare Agents SDK stateless handler.
+## Identifiers
 
-The public transport is Streamable HTTP at `/mcp`. Each request receives a fresh server instance and must not depend on in-memory session state.
+The public contract uses two source-neutral identifiers:
 
-## 1. search_datasets
+- `data_id` identifies a logical dataset, cube, feed, station collection, or
+  equivalent provider object.
+- `access_id` identifies one table, file, feed, API representation, or other
+  access point belonging to that data object.
 
-Search datasets within one provider.
+An identifier is interpreted only together with `source`. The source must not
+be encoded into either identifier. Clients obtain `data_id` from search and
+`access_id` from describe.
+
+## 1. list_sources
+
+Lists configured sources and their source type, authority status, geographic
+coverage, description, enabled capabilities, queryable formats, default limit,
+and maximum limit.
+
+This tool takes no inputs. Its response is derived from provider configuration.
+
+## 2. search_data_by_source
+
+Searches within exactly one source.
 
 ### Inputs
 
 - `source` — required
 - `query` — optional keyword search
-- `limit` — optional integer from 1 to 100 under the current provider configs
-- `offset` — optional non-negative integer
-
-### Example
-
-    search_datasets(
-      source="smart_dublin",
-      query="traffic",
-      limit=10
-    )
+- `limit` — optional configured bounded integer
+- `cursor` — optional opaque continuation cursor returned by this tool
 
 ### Response
 
-Should include:
+Includes:
 
-- source
-- dataset ID
-- title
-- description where available
-- publisher where available
-- available formats where available
-- upstream URL
-- retrieval timestamp
+- results containing `data_id`, title, optional description and publisher,
+  available formats, and provenance
+- returned result count
+- total when known
+- `truncated`
+- `next_cursor` when more results may be available
 
-No interpretation or ranking beyond what the upstream provider already returns.
+The server must not expose provider-specific offset or query syntax as part of
+the public contract. A search cursor is bound to its source and query.
 
----
+## 3. describe_data_by_id
 
-## 2. get_dataset
-
-Retrieve metadata for one dataset.
+Describes one logical data object.
 
 ### Inputs
 
 - `source` — required
-- `dataset_id` — required
+- `data_id` — required; obtain it from `search_data_by_source`
 
 ### Response
 
-Should include:
+Includes normalized metadata and the complete list of access points. Each
+access point includes:
 
-- dataset ID
-- title
-- description
-- publisher
-- licence where available
-- tags where available
-- available resources, including each format and whether it is supported for retrieval
-- upstream URL
-- retrieval timestamp
+- `access_id`
+- reported format
+- catalogued upstream URL
+- explicit `query` and `link` capabilities
+- optional title, description, size, and last-modified metadata
 
-Resources should include enough information for a client to request them through `get_resource`.
+The access-point list is metadata and is intentionally not paginated.
+Unsupported query formats remain discoverable and linkable when the catalogue
+provides a valid public HTTP or HTTPS URL.
 
-The resource list is complete metadata for the dataset and is intentionally not
-paginated. Every catalogued resource remains listed, including formats that the
-server cannot retrieve directly.
+## 4. query_data_by_id
 
----
-
-## 3. get_resource
-
-Retrieve data from a specific dataset resource.
+Returns bounded structured data from one access point.
 
 ### Inputs
 
 - `source` — required
-- `dataset_id` — required
-- `resource_id` — required; obtain it from `get_dataset`
-- `limit` — optional integer from 1 to 100 under the current provider configs
-- `offset` — optional non-negative integer
-
-Provider adapters may internally resolve resource IDs differently.
+- `data_id` — required
+- `access_id` — required; obtain it from `describe_data_by_id`
+- `fields` — optional list of up to ten unique field names
+- `spatial` — optional WGS84 point containing latitude and longitude
+- `time_range` — optional bounded RFC3339 start and end timestamps
+- `limit` — optional configured bounded integer
+- `cursor` — optional opaque continuation cursor returned by this tool
 
 ### Response
 
-Should include:
+Includes:
 
-- source
-- dataset ID where available
-- resource ID
-- original format
-- upstream URL
-- retrieval timestamp
+- source-neutral identifiers
 - returned data
-- whether pagination is supported for this resource
-- pagination metadata where applicable
+- provenance
+- returned item count where pagination applies
+- total when known
+- `truncated`
+- `next_cursor` when more data may be available
 
-The resource may be converted into a structured representation such as JSON.
+Cursor tokens are stateless, validated, and bound to the source, data ID,
+access ID, and selectors. Provider adapters may translate a valid cursor into
+an internal offset or another provider-specific pagination mechanism.
 
-The meaning of the underlying data must not be changed.
+Pagination applies to CKAN DataStore rows, tabular resources, and top-level
+JSON arrays. Whole JSON and XML documents are returned as documents and are
+not paginated. `total` remains optional because a bounded streaming resource
+may not know it without reading the complete upstream body.
 
-`get_resource` retrieves the catalogued resource. If that resource is an
-OpenAPI document, the document is returned; the server does not execute the API
-described by it.
+Direct structured query initially supports CSV, JSON, and XML. CKAN
+DataStore-backed access points can be queried regardless of the original file
+format. Unsupported direct formats return `UNSUPPORTED_FORMAT`.
 
----
+The tool retrieves only the described access point. It does not execute an API
+described by an OpenAPI document and does not accept arbitrary provider
+parameters, filters, sorting, grouping, or aggregation. Field, point, and time
+selectors are forwarded only to adapters that explicitly implement them.
+
+The Met Éireann `point_forecast` access point requires `spatial`. Open-Meteo's
+`hourly_forecast` requires `spatial`, `fields`, and `time_range`; it accepts
+only Republic of Ireland points and its configured ECMWF IFS hourly fields.
+
+## 5. get_data_link_by_id
+
+Returns metadata and a clickable MCP `resource_link` for one catalogued access
+point.
+
+### Inputs
+
+- `source` — required
+- `data_id` — required
+- `access_id` — required; obtain it from `describe_data_by_id`
+
+The tool never downloads, streams, parses, or previews the linked bytes. It
+accepts no arbitrary URL. It returns only a catalogued HTTP or HTTPS URL and
+must never add or expose provider credentials.
+
+Dynamic forecast access points have `link: false`; calling this tool for them
+returns `UNSUPPORTED_OPERATION` because no stable browser-openable data URL
+exists without query parameters.
 
 ## Source Parameter
 
@@ -130,87 +165,34 @@ described by it.
 - `data_gov_ie`
 - `smart_dublin`
 - `met_eireann`
+- `open_meteo_ie`
 
-Unknown sources must return:
+Unknown sources return `INVALID_SOURCE`. A harvested record can appear through
+more than one source, and its metadata may differ between catalogues.
 
-`INVALID_SOURCE`
-
-`source` selects one upstream catalogue. A harvested dataset can appear through
-more than one source, and its metadata may differ between those catalogues.
-
----
+`met_eireann` is authoritative. `open_meteo_ie` is a non-authoritative model
+forecast source restricted to Republic of Ireland point queries.
 
 ## Limits
 
-Tools should support limits to prevent excessively large responses.
+Default and maximum limits come from provider configuration. Requests above
+the common advertised maximum are rejected during tool validation. Provider
+adapters also enforce their own configured maximum.
 
-Each provider may define:
-
-- default limit
-- maximum limit
-
-These values come from provider configuration.
-
-Requests exceeding the maximum should be capped or rejected consistently.
-
-The current provider configurations set the `search_datasets` and
-`get_resource` limits to a maximum of 100.
-
----
-
-## Pagination
-
-Pagination applies to CKAN DataStore rows, tabular resources, and top-level JSON
-arrays. Where supported, it should use:
-
-- `limit`
-- `offset`
-
-Provider-specific pagination mechanisms must remain hidden inside adapters.
-
-`pagination.total` is optional. Streaming external resources may not know the
-total without reading the entire file. Whole JSON documents and XML documents
-are returned as documents and are not paginated.
-
----
-
-## Resource Formats
-
-All catalogued formats must remain discoverable. The initial formats supported
-for direct retrieval are:
-
-- CSV
-- JSON
-- XML
-
-Resource handlers may convert these into structured JSON responses. CKAN
-DataStore-backed resources can be returned as typed JSON. CSV values remain
-strings, while DataStore value types are preserved.
-
-Unsupported formats return:
-
-`UNSUPPORTED_FORMAT`
-
----
+The current provider configurations use a maximum limit of 100.
 
 ## Standard Response Metadata
 
-Responses should include provenance where available:
+Responses include provenance where available:
 
 - `source`
 - `upstream_url`
 - `retrieved_at`
-- `original_format`
-
-Dataset and resource identifiers should also be included where applicable.
-
----
+- `original_format` where applicable
 
 ## Standard Errors
 
-The MCP server should use consistent error codes.
-
-Initial error codes:
+The MCP server uses consistent error codes:
 
 - `INVALID_SOURCE`
 - `INVALID_REQUEST`
@@ -218,29 +200,21 @@ Initial error codes:
 - `RESOURCE_NOT_FOUND`
 - `UNSUPPORTED_OPERATION`
 - `UNSUPPORTED_FORMAT`
+- `RESOURCE_TOO_LARGE`
 - `UPSTREAM_ERROR`
 - `UPSTREAM_TIMEOUT`
 - `RATE_LIMITED`
 
-Error shape:
-
-    {
-      "error": "RESOURCE_NOT_FOUND",
-      "message": "The requested resource could not be found."
-    }
-
----
+The existing dataset/resource error code names are retained internally for
+compatibility, while public tool fields use `data_id` and `access_id`.
 
 ## Design Rules
 
 - Tools remain generic.
 - One tool call targets one provider.
-- No cross-source queries.
-- No joins.
-- No analytics.
-- No derived insights.
-- No recommendations.
+- No cross-source search.
+- No joins, analytics, aggregation, derived insights, or recommendations.
 - No write operations.
 - No provider-specific MCP tools.
-- Format conversion is allowed.
-- Semantic transformation is not.
+- No arbitrary API execution.
+- Format conversion is allowed; semantic transformation is not.
