@@ -2,13 +2,6 @@
 
 Read-only Irish public data through one remote MCP endpoint.
 
-## Providers
-
-- `data_gov_ie`
-- `smart_dublin`
-- `met_eireann`
-- `open_meteo_ie` — non-authoritative ECMWF IFS model forecast, Ireland-only
-
 ## Tools
 
 - `list_sources`
@@ -17,24 +10,33 @@ Read-only Irish public data through one remote MCP endpoint.
 - `query_data_by_id`
 - `get_data_link_by_id`
 
-No joins, analytics, recommendations, or derived insights.
+The tools are source-neutral. Use `source + data_id` for one data object and
+`access_id` for one of its query or download access points. Query capabilities
+and accepted selectors are returned by `describe_data_by_id`.
 
-`source` selects one upstream catalogue. Harvested datasets can appear in more
-than one catalogue and may have different metadata there.
+Raw files are exposed as browser-openable links. They are not streamed through
+MCP. The server performs no joins, analytics, recommendations, or derived
+insights.
 
-Use `source + data_id` for a logical data object and `access_id` for one of its
-access points. Search and structured queries use opaque continuation cursors.
+## Sources
 
-Current provider configs allow `limit` values from 1 to 100. Structured queries
-support CSV, JSON, XML, and CKAN DataStore-backed access points. Other formats
-remain discoverable through browser-openable links.
+Republic of Ireland and Ireland-scoped sources:
 
-Forecast queries use the same tools. Met Éireann exposes an authoritative point
-forecast. Open-Meteo exposes non-authoritative ECMWF IFS model output for points
-inside the Republic of Ireland.
+- `data_gov_ie`, `smart_dublin`, `met_eireann`, `open_meteo_ie`
+- `cso_pxstat`, `marine_institute`, `geohive`, `opw`, `epa`
+- `tfi_nta`, `seai`, `eirgrid`
 
-Do not deploy the forecast expansion yet: Met Éireann warning-display licence
-compliance and source-wide Open-Meteo rate limiting remain deployment gates.
+`open_data_ni` is explicitly Northern Ireland, UK. `open_meteo_ie` is
+non-authoritative model output and is currently disabled until shared rate
+limiting is configured; Met Éireann is the authoritative Irish weather source.
+Sources are never silently merged.
+
+Each provider YAML may set `enabled: false` to omit that source. When the field
+is absent, the source is enabled.
+
+The Phase 2 source expansion is implemented in the current branch but is not
+deployment-ready until the operational gates in
+[`specs/004-deployment.md`](specs/004-deployment.md) are cleared.
 
 ## Local development
 
@@ -46,10 +48,10 @@ cp .env.example .env
 npm run dev
 ```
 
-MCP endpoint: `https://ireland-open-data-mcp.ireland-open-data-mcp.workers.dev/mcp`
+MCP endpoint:
+`https://ireland-open-data-mcp.ireland-open-data-mcp.workers.dev/mcp`
 
-The checked-in configuration uses GitHub OAuth. Add the GitHub client values to
-`.env` before starting locally. Authentication modes are documented in
+Authentication is selected in `config/server.yml`. See
 [`docs/authentication.md`](docs/authentication.md).
 
 ## Checks
@@ -57,6 +59,7 @@ The checked-in configuration uses GitHub OAuth. Add the GitHub client values to
 ```bash
 npm run typecheck
 npm test
+npx wrangler deploy --dry-run
 ```
 
 ## Deploy
@@ -65,11 +68,5 @@ npm test
 npm run deploy
 ```
 
-Authentication modes are configured in `config/server.yml`.
-
-## Runtime
-
-- Cloudflare Workers
-- TypeScript
-- Stateless Streamable HTTP MCP at `/mcp`
-- YAML-configured provider adapters
+Runtime: Cloudflare Workers, TypeScript, stateless Streamable HTTP at `/mcp`,
+and YAML-configured provider adapters.

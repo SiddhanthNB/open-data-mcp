@@ -19,6 +19,7 @@ import {
   defaultForecastSettings,
   MET_EIREANN_FORECAST_ACCESS_ID,
   MET_EIREANN_FORECAST_DATA_ID,
+  MET_EIREANN_FORECAST_FIELDS,
   MET_EIREANN_FORECAST_LICENCE_NOTICE,
   MetEireannForecastClient,
   type MetEireannForecastOverrides,
@@ -89,6 +90,17 @@ export class MetEireannAdapter extends CkanAdapter {
       description: `Dynamic XML point forecast. ${MET_EIREANN_FORECAST_LICENCE_NOTICE}`,
       format: "xml",
       capabilities: { query: true, link: false },
+      query_schema: {
+        fields: MET_EIREANN_FORECAST_FIELDS.map((name) => ({
+          name,
+          type: "string" as const,
+          operators: [],
+        })),
+        truncated: false,
+        spatial: ["point"],
+        supported_selectors: ["fields", "spatial", "time_range"],
+        required_selectors: ["spatial"],
+      },
       upstream_url: this.forecast.endpoint,
     };
     return {

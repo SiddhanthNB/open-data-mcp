@@ -1,0 +1,21 @@
+provider: tfi_nta
+type: transport_feeds
+authoritative: true
+coverage: Ireland, including cross-border services present in published feeds
+description: TFI/NTA static GTFS link and metadata-only realtime feed discovery.
+base_url: https://www.transportforireland.ie
+endpoints:
+  static_gtfs: https://www.transportforireland.ie/transitData/Data/GTFS_Realtime.zip
+  developer_portal: https://developer.nationaltransport.ie/
+http_timeout_ms: 10000
+pagination:
+  default_limit: 10
+  max_limit: 100
+capabilities:
+  search_data_by_source: true
+  describe_data_by_id: true
+  query_data_by_id: false
+  get_data_link_by_id: true
+formats:
+  - zip
+  - gtfs-realtime

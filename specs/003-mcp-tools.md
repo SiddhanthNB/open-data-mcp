@@ -16,6 +16,15 @@ Supported sources:
 - `smart_dublin`
 - `met_eireann`
 - `open_meteo_ie`
+- `cso_pxstat`
+- `marine_institute`
+- `geohive`
+- `opw`
+- `epa`
+- `tfi_nta`
+- `seai`
+- `eirgrid`
+- `open_data_ni`
 
 The public transport is stateless Streamable HTTP at `/mcp`. Each request
 receives a fresh server instance and must not depend on in-memory session state.
@@ -84,6 +93,8 @@ access point includes:
 - reported format
 - catalogued upstream URL
 - explicit `query` and `link` capabilities
+- optional query schema describing fields, types, allowed operators and spatial
+  selector types, plus supported and required selectors
 - optional title, description, size, and last-modified metadata
 
 The access-point list is metadata and is intentionally not paginated.
@@ -100,7 +111,9 @@ Returns bounded structured data from one access point.
 - `data_id` — required
 - `access_id` — required; obtain it from `describe_data_by_id`
 - `fields` — optional list of up to ten unique field names
-- `spatial` — optional WGS84 point containing latitude and longitude
+- `filters` — optional list of up to twenty typed field filters; operators are
+  `eq`, `in`, `lt`, `lte`, `gt`, and `gte`, and `in` accepts at most 100 values
+- `spatial` — optional WGS84 point or bounding box
 - `time_range` — optional bounded RFC3339 start and end timestamps
 - `limit` — optional configured bounded integer
 - `cursor` — optional opaque continuation cursor returned by this tool
@@ -132,12 +145,28 @@ format. Unsupported direct formats return `UNSUPPORTED_FORMAT`.
 
 The tool retrieves only the described access point. It does not execute an API
 described by an OpenAPI document and does not accept arbitrary provider
-parameters, filters, sorting, grouping, or aggregation. Field, point, and time
-selectors are forwarded only to adapters that explicitly implement them.
+parameters, sorting, grouping, or aggregation. Fields, filters, spatial
+selectors, and time ranges are translated only by adapters that explicitly
+advertise and implement them. Unsupported selectors fail explicitly.
+
+Every tool response is subject to the shared configured output-size limit.
 
 The Met Éireann `point_forecast` access point requires `spatial`. Open-Meteo's
 `hourly_forecast` requires `spatial`, `fields`, and `time_range`; it accepts
 only Republic of Ireland points and its configured ECMWF IFS hourly fields.
+
+Other source-specific constraints are advertised through access-point metadata:
+
+- CSO PxStat queries require exact dimension selections and are capped at 100
+  selected Cartesian cells.
+- Marine ERDDAP selectors depend on each dataset's dimensions and variables.
+- GeoHive feature layers may accept fields, point or bounding-box selection,
+  and time ranges; WMS remains link-only.
+- OPW sensor queries require a time range inside the rolling 35-day window.
+- EPA initially supports only the described Bathing Water measurement filter.
+- TFI/NTA realtime access is disabled until its operational gates are met.
+- EirGrid queries require a time range of at most 24 hours and the filter shown
+  by the selected data object.
 
 ## 5. get_data_link_by_id
 
@@ -152,7 +181,8 @@ point.
 
 The tool never downloads, streams, parses, or previews the linked bytes. It
 accepts no arbitrary URL. It returns only a catalogued HTTP or HTTPS URL and
-must never add or expose provider credentials.
+must never add or expose provider credentials. Links containing URL user-info,
+credential query parameters, or credential fragments are rejected.
 
 Dynamic forecast access points have `link: false`; calling this tool for them
 returns `UNSUPPORTED_OPERATION` because no stable browser-openable data URL
@@ -166,12 +196,25 @@ exists without query parameters.
 - `smart_dublin`
 - `met_eireann`
 - `open_meteo_ie`
+- `cso_pxstat`
+- `marine_institute`
+- `geohive`
+- `opw`
+- `epa`
+- `tfi_nta`
+- `seai`
+- `eirgrid`
+- `open_data_ni`
 
-Unknown sources return `INVALID_SOURCE`. A harvested record can appear through
+Unknown sources return `INVALID_SOURCE`; configured but disabled sources return
+`SOURCE_DISABLED`. A harvested record can appear through
 more than one source, and its metadata may differ between catalogues.
 
 `met_eireann` is authoritative. `open_meteo_ie` is a non-authoritative model
 forecast source restricted to Republic of Ireland point queries.
+`open_data_ni` covers Northern Ireland, United Kingdom. EirGrid records may
+cover the Republic of Ireland, Northern Ireland, or the all-island system and
+must retain their upstream region label.
 
 ## Limits
 

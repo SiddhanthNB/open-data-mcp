@@ -9,6 +9,7 @@ import {
 import {
   MET_EIREANN_FORECAST_ACCESS_ID,
   MET_EIREANN_FORECAST_DATA_ID,
+  MET_EIREANN_FORECAST_FIELDS,
   MET_EIREANN_FORECAST_LICENCE_NOTICE,
 } from "../../src/providers/met-eireann/forecast";
 
@@ -146,6 +147,24 @@ function forecastDataset(): Record<string, unknown> {
 }
 
 describe("Met Éireann point forecast", () => {
+  it("rejects filters instead of silently ignoring them", async () => {
+    const upstream = recordingFetch(xmlResponse());
+    const adapter = new MetEireannAdapter(
+      config(),
+      dependencies(upstream.fetcher),
+    );
+
+    await expect(
+      adapter.queryData({
+        data_id: MET_EIREANN_FORECAST_DATA_ID,
+        access_id: MET_EIREANN_FORECAST_ACCESS_ID,
+        spatial: { type: "point", latitude: 53.3, longitude: -6.2 },
+        filters: [{ field: "temperature", operator: "gte", value: 10 }],
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+    expect(upstream.calls).toHaveLength(0);
+  });
+
   it("advertises the synthetic query access only on the forecast dataset", async () => {
     const upstream = recordingFetch(ckanResponse(forecastDataset()));
     const adapter = new MetEireannAdapter(
@@ -163,8 +182,37 @@ describe("Met Éireann point forecast", () => {
       description: `Dynamic XML point forecast. ${MET_EIREANN_FORECAST_LICENCE_NOTICE}`,
       format: "xml",
       capabilities: { query: true, link: false },
+      query_schema: {
+        fields: MET_EIREANN_FORECAST_FIELDS.map((name) => ({
+          name,
+          type: "string",
+          operators: [],
+        })),
+        truncated: false,
+        spatial: ["point"],
+        supported_selectors: ["fields", "spatial", "time_range"],
+        required_selectors: ["spatial"],
+      },
       upstream_url: ENDPOINT,
     });
+  });
+
+  it("rejects forecast fields outside the advertised allowlist", async () => {
+    const upstream = recordingFetch(xmlResponse());
+    const adapter = new MetEireannAdapter(
+      config(),
+      dependencies(upstream.fetcher),
+    );
+
+    await expect(
+      adapter.queryData({
+        data_id: MET_EIREANN_FORECAST_DATA_ID,
+        access_id: MET_EIREANN_FORECAST_ACCESS_ID,
+        spatial: { type: "point", latitude: 53.3, longitude: -6.2 },
+        fields: ["notARealForecastElement"],
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+    expect(upstream.calls).toHaveLength(0);
   });
 
   it("does not advertise the synthetic access on another dataset", async () => {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { AppError } from "../src/errors";
-import type { ProviderConfig, Source } from "../src/models";
+import { SOURCES, type ProviderConfig, type Source } from "../src/models";
 import type { ProviderAdapter } from "../src/providers/provider";
 import { SourceRouter } from "../src/router";
 
@@ -54,11 +54,15 @@ describe("SourceRouter", () => {
   const smartDublinAdapter = createAdapter("smart_dublin");
   const metEireannAdapter = createAdapter("met_eireann");
   const openMeteoAdapter = createAdapter("open_meteo_ie");
+  const remainingAdapters = SOURCES.slice(4).map((source) =>
+    createAdapter(source),
+  );
   const adapters = [
     dataGovAdapter,
     smartDublinAdapter,
     metEireannAdapter,
     openMeteoAdapter,
+    ...remainingAdapters,
   ];
   const router = new SourceRouter(adapters);
 
@@ -85,21 +89,43 @@ describe("SourceRouter", () => {
     );
   });
 
+  it("excludes disabled sources and returns a specific error for them", () => {
+    const disabledSource = "open_data_ni";
+    const disabledRouter = new SourceRouter(
+      adapters.filter((adapter) => adapter.config.provider !== disabledSource),
+      [disabledSource],
+    );
+
+    expect(
+      disabledRouter
+        .listSources()
+        .some(({ source }) => source === disabledSource),
+    ).toBe(false);
+    expectCode(
+      () => disabledRouter.resolve(disabledSource, "search_data_by_source"),
+      "SOURCE_DISABLED",
+    );
+  });
+
   it("fails during construction when a source is not registered", () => {
     expect(
       () =>
         new SourceRouter([
-          dataGovAdapter,
-          smartDublinAdapter,
-          metEireannAdapter,
+          ...adapters.slice(0, -1),
         ]),
-    ).toThrow("Missing provider adapter: open_meteo_ie");
+    ).toThrow("Missing provider adapter: open_data_ni");
   });
 
   it("rejects duplicate adapter registration", () => {
     expect(
       () => new SourceRouter([...adapters, createAdapter("data_gov_ie")]),
     ).toThrow("Duplicate provider adapter: data_gov_ie");
+  });
+
+  it("rejects a source that is both registered and disabled", () => {
+    expect(() => new SourceRouter(adapters, ["open_data_ni"])).toThrow(
+      "Provider cannot be registered and disabled: open_data_ni",
+    );
   });
 
   it("enforces provider capabilities", () => {

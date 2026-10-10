@@ -2,14 +2,28 @@
 
 ## Overview
 
-Ireland Open Data MCP supports four providers:
+Ireland Open Data MCP supports thirteen sources:
 
 - `data_gov_ie`
 - `smart_dublin`
 - `met_eireann`
 - `open_meteo_ie`
+- `cso_pxstat`
+- `marine_institute`
+- `geohive`
+- `opw`
+- `epa`
+- `tfi_nta`
+- `seai`
+- `eirgrid`
+- `open_data_ni`
 
-Each provider is implemented through its own adapter and configuration file.
+Each source has independent configuration. Sources may share an adapter when
+their upstream protocol is the same.
+
+The optional top-level `enabled` setting defaults to `true`. Setting it to
+`false` prevents that adapter from being initialized and removes the source
+from `list_sources` without deleting its configuration.
 
 ## Provider Configuration
 
@@ -19,6 +33,15 @@ Each provider has an independent YAML configuration file:
 - `config/smart_dublin.yml`
 - `config/met_eireann.yml`
 - `config/open_meteo_ie.yml`
+- `config/cso_pxstat.yml`
+- `config/marine_institute.yml`
+- `config/geohive.yml`
+- `config/opw.yml`
+- `config/epa.yml`
+- `config/tfi_nta.yml`
+- `config/seai.yml`
+- `config/eirgrid.yml`
+- `config/open_data_ni.yml`
 
 Provider URLs and operational settings must not be hardcoded in application code.
 
@@ -39,8 +62,8 @@ Provider configuration may define:
 - supported resource formats
 - other connection-level settings
 - authority status and geographic coverage
-- provider-specific forecast endpoint, model, field allowlist, units, horizon,
-  attribution, and spatial bounds where applicable
+- source-specific endpoint allowlists, field or dimension allowlists, units,
+  time windows, attribution, and spatial bounds where applicable
 
 Response parsing and provider-specific transformation logic must remain in adapter code.
 
@@ -92,12 +115,20 @@ Attempting to query any other direct format must return the standardized
 
 ## Provider Adapters
 
-Each provider has its own adapter:
+Provider adapters include:
 
 - `DataGovAdapter`
 - `SmartDublinAdapter`
 - `MetEireannAdapter`
 - `OpenMeteoAdapter`
+- `CsoPxStatAdapter`
+- `MarineErddapAdapter`
+- `GeoHiveAdapter`
+- `OpwAdapter`
+- `EpaAdapter`
+- `TfiNtaAdapter`
+- `EirGridAdapter`
+- the scoped CKAN adapter used by `seai` and `open_data_ni`
 
 Adapters are responsible for:
 
@@ -179,7 +210,114 @@ provenance.
 
 Open-Meteo is operated by Open-Meteo GmbH, not an Irish public body. Its data is
 non-authoritative model output, not observations or an official Irish forecast.
-It must remain visibly distinct from Met Éireann.
+It must remain visibly distinct from Met Éireann. The source is configured with
+`enabled: false` until shared rate limiting is available.
+
+## CSO PxStat
+
+Source identifier: `cso_pxstat`
+
+This source exposes CSO statistical matrices. `data_id` is the matrix code.
+Search and metadata use the PxStat public APIs. The queryable JSON-stat access
+point accepts exact dimension filters and returns at most 100 selected Cartesian
+cells per request. CSV, JSON-stat, PC-Axis, and XLSX representations remain
+available as links where published.
+
+PxStat does not provide general row-offset pagination. Large dimension value
+vocabularies may be truncated in the described query schema, and clients must
+make explicit bounded selections.
+
+## Marine Institute
+
+Source identifier: `marine_institute`
+
+This source exposes Marine Institute ERDDAP datasets through `tabledap`,
+`griddap`, and file access points when advertised upstream. Field, typed filter,
+spatial, and time selectors are translated only where the described dataset
+supports them. Per-dataset licence metadata must be preserved.
+
+General `tabledap` offset paging is not assumed. Responses are bounded and must
+state when further data may exist. `griddap` cursor paging is exposed only when
+exact constraints leave one dimension unbounded; range selections that could
+skip Cartesian rows are rejected. Marine requests use a 20-second timeout and
+one retry for a timeout or HTTP 502, 503, or 504 response. Live connectivity to
+the upstream ERDDAP service must still be verified from the deployment
+environment.
+
+## GeoHive
+
+Source identifier: `geohive`
+
+This source uses the GeoHive OGC catalogue for discovery. Supported ArcGIS
+feature layers may be queried with fields, point or bounding-box selection, and
+time ranges. WMS and other non-queryable services remain link-only.
+
+Only catalogued and allowlisted service URLs may be called. Licence and
+attribution are preserved per catalogue record or layer.
+
+## OPW
+
+Source identifier: `opw`
+
+This source exposes waterlevel.ie stations and configured sensor time series.
+`data_id` identifies a station and `access_id` identifies a supported sensor.
+Queries require a bounded time range inside the rolling 35-day window.
+
+Only station references permitted for republication are exposed. Provisional
+data notices, attribution, and station restrictions must be retained. Public
+deployment requires a shared 15-minute cache. Hydro-Data is outside this phase.
+
+## EPA
+
+Source identifier: `epa`
+
+The initial EPA scope is the Bathing Water API: locations, measurements, and
+alerts. It uses a small configured catalogue rather than representing every EPA
+API family as one uniform service. Measurement queries support only the
+described `in_season` filter. EPA attribution and licence metadata are retained.
+No numeric upstream rate limit is documented for this API scope, so requests
+remain bounded and upstream rate responses must be monitored.
+
+## TFI/NTA
+
+Source identifier: `tfi_nta`
+
+The initial safe scope exposes TFI/NTA feed metadata. The static GTFS schedule
+archive is link-only and is never downloaded or parsed by the Worker. Realtime
+feeds are described but remain non-queryable and non-linkable until API-key,
+payload, shared-cache, and one-call-per-minute coordination requirements are
+implemented.
+
+## SEAI
+
+Source identifier: `seai`
+
+This source is a scoped view of the Sustainable Energy Authority of Ireland
+publisher on data.gov.ie. It reuses the CKAN adapter while keeping a distinct
+source identity, scope, provenance, and licence metadata.
+
+## EirGrid
+
+Source identifier: `eirgrid`
+
+The configured catalogue contains wind generation, solar generation, and
+interconnector-flow time series. Queries require a time range no longer than 24
+hours. Wind and solar use an explicit region filter; interconnector queries use
+the described field-name filter. Dynamic access points have no stable raw-data
+link.
+
+The adapter converts RFC3339 instants to the Europe/Dublin wall-clock format
+required upstream without reinterpreting returned values. Endpoint stability
+and upstream rate behaviour must be verified before deployment.
+
+## OpenDataNI
+
+Source identifier: `open_data_ni`
+
+This source reuses the CKAN adapter against the OpenDataNI catalogue. Its
+coverage is explicitly Northern Ireland, United Kingdom. It is relevant to
+all-island use cases but must not be labelled Republic of Ireland government
+data. Licences are preserved per dataset rather than assumed globally.
 
 ## Resource Retrieval
 
@@ -234,3 +372,18 @@ Providers may expose completely different upstream APIs.
 The adapter layer exists specifically to absorb these differences.
 
 Neither MCP clients nor MCP tools should need to understand how an individual upstream provider works.
+
+## Official Upstream References
+
+- [data.gov.ie](https://data.gov.ie/) and [Smart Dublin](https://data.smartdublin.ie/)
+- [Met Éireann forecast API](https://data.gov.ie/dataset/met-eireann-forecast-api)
+  and [Open-Meteo forecast API](https://open-meteo.com/en/docs)
+- [CSO PxStat](https://www.cso.ie/en/databases/userguides/pxstatuserguide/)
+- [Marine Institute ERDDAP](https://erddap.marine.ie/erddap/index.html)
+- [GeoHive search API](https://ga.geohive.ie/api/search/definition/)
+- [OPW water-level API](https://waterlevel.ie/page/api/)
+- [EPA open-data APIs](https://data.epa.ie/)
+- [NTA developer portal](https://developer.nationaltransport.ie/)
+- [SEAI data](https://www.seai.ie/energy-data-and-insights) and
+  [EirGrid data](https://www.eirgrid.ie/grid/system-and-renewable-data-reports)
+- [OpenDataNI API](https://admin.opendatani.gov.uk/en_GB/api/1/util/snippet/api_info.html?resource_id=4436c31a-12c9-4ed9-9f2f-136925ec8faa)

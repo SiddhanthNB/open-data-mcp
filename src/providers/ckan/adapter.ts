@@ -114,6 +114,17 @@ export class CkanAdapter implements ProviderAdapter {
     if (!input.data_id) {
       throw new AppError("INVALID_REQUEST");
     }
+    if (
+      input.fields !== undefined ||
+      input.filters !== undefined ||
+      input.spatial !== undefined ||
+      input.time_range !== undefined
+    ) {
+      throw new AppError(
+        "INVALID_REQUEST",
+        "CKAN resources do not support fields, filters, spatial, or time_range selectors.",
+      );
+    }
 
     const dataset = await this.client.packageShow(input.data_id);
     this.enforceScope(dataset);

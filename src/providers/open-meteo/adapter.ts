@@ -126,6 +126,17 @@ export class OpenMeteoAdapter implements ProviderAdapter {
             "Point forecast for the Republic of Ireland. Model output, not an observation or an official Irish forecast.",
           format: "json",
           capabilities: { query: true, link: false },
+          query_schema: {
+            fields: this.config.forecast.allowed_hourly_fields.map((name) => ({
+              name,
+              type: "number" as const,
+              operators: [],
+            })),
+            truncated: false,
+            spatial: ["point"],
+            supported_selectors: ["fields", "spatial", "time_range"],
+            required_selectors: ["fields", "spatial", "time_range"],
+          },
           upstream_url: this.config.forecast.endpoint,
         },
       ],
@@ -135,7 +146,19 @@ export class OpenMeteoAdapter implements ProviderAdapter {
   async queryData(input: QueryDataInput): Promise<QueryDataResult> {
     this.requireDataId(input.data_id);
     this.requireAccessId(input.access_id);
+    if (input.filters !== undefined) {
+      throw new AppError(
+        "INVALID_REQUEST",
+        "filters are not supported for Open-Meteo forecasts.",
+      );
+    }
     const { limit, offset } = this.pagination(input.limit, input.offset);
+    if (input.spatial?.type !== "point") {
+      throw new AppError(
+        "INVALID_REQUEST",
+        "spatial must be a WGS84 point inside the Republic of Ireland.",
+      );
+    }
     const point = requireIrishPoint(input.spatial);
     const fields = requireFields(input.fields, this.config.forecast);
     const range = requireForecastRange(

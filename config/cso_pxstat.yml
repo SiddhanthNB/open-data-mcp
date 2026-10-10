@@ -1,0 +1,31 @@
+provider: cso_pxstat
+type: statistical_cube
+authoritative: true
+coverage: Republic of Ireland
+description: Official CSO PxStat statistical tables and multidimensional data.
+base_url: https://ws.cso.ie/public/api.restful
+endpoints:
+  json_rpc: https://ws.cso.ie/public/api.jsonrpc
+  restful: https://ws.cso.ie/public/api.restful
+http_timeout_ms: 10000
+pagination:
+  default_limit: 10
+  max_limit: 100
+capabilities:
+  search_data_by_source: true
+  describe_data_by_id: true
+  query_data_by_id: true
+  get_data_link_by_id: true
+formats:
+  - json-stat2
+  - json-stat1
+  - csv
+  - px
+  - xlsx
+methods:
+  search: PxStat.System.Navigation.Navigation_API.Search
+  read_dataset: PxStat.Data.Cube_API.ReadDataset
+language: en
+search_result_limit: 100
+max_dimension_values: 100
+max_cells: 100

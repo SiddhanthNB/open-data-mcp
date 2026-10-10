@@ -1,0 +1,36 @@
+provider: geohive
+type: geospatial_catalogue
+authoritative: true
+coverage: Republic of Ireland
+description: GeoHive geospatial catalogue with allowlisted ArcGIS and WMS access.
+base_url: https://ga.geohive.ie
+endpoints:
+  catalogue_origin: https://ga.geohive.ie
+  portal_origin: https://www.arcgis.com
+http_timeout_ms: 10000
+pagination:
+  default_limit: 10
+  max_limit: 100
+capabilities:
+  search_data_by_source: true
+  describe_data_by_id: true
+  query_data_by_id: true
+  get_data_link_by_id: true
+formats:
+  - json
+  - wms
+allowed_arcgis_hosts:
+  - services-eu1.arcgis.com
+  - services.arcgis.com
+  - services1.arcgis.com
+  - services3.arcgis.com
+  - services7.arcgis.com
+  - utility.arcgis.com
+allowed_wms_hosts:
+  - atlas.marine.ie
+  - gis.epa.ie
+  - gsi.geodata.gov.ie
+  - www.floodinfo.ie
+max_layers: 20
+max_schema_fields: 100
+max_selected_fields: 10

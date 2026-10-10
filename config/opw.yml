@@ -1,0 +1,55 @@
+provider: opw
+type: station_timeseries
+authoritative: true
+coverage: Republic of Ireland monitoring stations
+description: OPW water-level stations and bounded recent sensor time series.
+base_url: https://waterlevel.ie
+endpoints:
+  stations: https://waterlevel.ie/geojson/
+  latest: https://waterlevel.ie/geojson/latest/
+  data_base: https://waterlevel.ie/data/
+http_timeout_ms: 10000
+pagination:
+  default_limit: 10
+  max_limit: 100
+capabilities:
+  search_data_by_source: true
+  describe_data_by_id: true
+  query_data_by_id: true
+  get_data_link_by_id: true
+formats:
+  - csv
+  - geojson
+sensors:
+  - access_id: water_level
+    code: "0001"
+    title: Water level
+    unit: m
+    value_column: value
+    caveat: Stage above the station staff-gauge zero.
+  - access_id: ordnance_datum
+    code: OD
+    title: Water level to ordnance datum
+    unit: m
+    value_column: value
+    caveat: The datum may be Poolbeg or Malin; check the official station page.
+  - access_id: temperature
+    code: "0002"
+    title: Temperature
+    unit: °C
+    value_column: value
+    caveat: Sensor heating can be significant in warm weather; this may not represent waterbody temperature.
+  - access_id: battery_voltage
+    code: "0003"
+    title: Battery voltage
+    unit: V
+    value_column: value
+    caveat: Operational station battery reading.
+  - access_id: backup_water_level
+    code: "0011"
+    title: Backup water level
+    unit: m
+    value_column: backup_value
+    caveat: Backup stream; since 2025-11-18 the file can also contain the main-sensor value.
+rolling_window_days: 35
+cache_ttl_seconds: 900

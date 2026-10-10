@@ -1,0 +1,26 @@
+provider: seai
+type: catalogue
+authoritative: true
+coverage: Republic of Ireland
+description: SEAI datasets scoped from the national data.gov.ie catalogue.
+base_url: https://data.gov.ie
+endpoints:
+  package_search: /api/3/action/package_search
+  package_show: /api/3/action/package_show
+  datastore_search: /api/3/action/datastore_search
+http_timeout_ms: 10000
+pagination:
+  default_limit: 10
+  max_limit: 100
+capabilities:
+  search_data_by_source: true
+  describe_data_by_id: true
+  query_data_by_id: true
+  get_data_link_by_id: true
+formats:
+  - csv
+  - json
+  - xml
+scope:
+  organization_name: sustainable-energy-authority-of-ireland
+  organization_id: sustainable-energy-authority-of-ireland

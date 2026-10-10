@@ -2,6 +2,7 @@ import { createMcpHandler } from "agents/mcp/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { providerConfigs } from "../src/config";
+import { SOURCES } from "../src/models";
 import type {
   DataLink,
   DataDescription,
@@ -81,6 +82,22 @@ const dataset: DataDescription = {
       title: "Road rows",
       format: "json",
       capabilities: { query: true, link: true },
+      query_schema: {
+        fields: [
+          {
+            name: "status",
+            type: "string",
+            operators: ["eq", "in"],
+            values: [
+              { value: "open", label: "Open" },
+              { value: "closed", label: "Closed" },
+            ],
+            values_truncated: false,
+          },
+        ],
+        truncated: false,
+        spatial: ["bbox"],
+      },
       upstream_url: "https://example.com/resource/roads.json",
     },
     {
@@ -156,11 +173,15 @@ const openMeteoAdapter = createAdapter("open_meteo_ie", {
   ...allCapabilities,
   get_data_link_by_id: false,
 });
+const remainingAdapters = SOURCES.slice(4).map((source) =>
+  createAdapter(source, allCapabilities),
+);
 const router = new SourceRouter([
   dataGovAdapter,
   smartDublinAdapter,
   metEireannAdapter,
   openMeteoAdapter,
+  ...remainingAdapters,
 ]);
 const handler = createMcpHandler(() => createServer(router), {
   route: "/mcp",
@@ -264,11 +285,37 @@ describe("source-neutral MCP tools", () => {
       minItems: 1,
       maxItems: 10,
     });
-    expect(query?.inputSchema.properties?.spatial).toMatchObject({
-      type: "object",
+    expect(query?.inputSchema.properties?.filters).toMatchObject({
+      type: "array",
+      minItems: 1,
+      maxItems: 20,
     });
+    expect(query?.inputSchema.properties?.spatial).toHaveProperty("oneOf");
     expect(query?.inputSchema.properties?.time_range).toMatchObject({
       type: "object",
+    });
+  });
+
+  it("enforces the shared output limit for non-query responses", async () => {
+    vi.mocked(dataGovAdapter.searchData).mockResolvedValueOnce({
+      results: [
+        {
+          data_id: "oversized",
+          title: "x".repeat(1_100_000),
+          provenance,
+        },
+      ],
+      pagination: { limit: 1, offset: 0, returned: 1, total: 1 },
+    });
+
+    const result = await callTool("search_data_by_source", {
+      source: "data_gov_ie",
+    });
+
+    expect(result.isError).toBe(true);
+    expect(errorContent(result)).toEqual({
+      error: "RESOURCE_TOO_LARGE",
+      message: "The requested resource exceeds the configured size limit.",
     });
   });
 
@@ -278,7 +325,7 @@ describe("source-neutral MCP tools", () => {
     expect(result.structuredContent).toEqual({
       sources: router.listSources(),
     });
-    expect(result.structuredContent?.sources).toHaveLength(4);
+    expect(result.structuredContent?.sources).toHaveLength(SOURCES.length);
     expect(result.structuredContent?.sources).toContainEqual(
       expect.objectContaining({
         source: "open_meteo_ie",
@@ -343,6 +390,17 @@ describe("source-neutral MCP tools", () => {
           access_id: "roads-json",
           format: "json",
           capabilities: { query: true, link: true },
+          query_schema: {
+            fields: [
+              expect.objectContaining({
+                name: "status",
+                operators: ["eq", "in"],
+                values_truncated: false,
+              }),
+            ],
+            truncated: false,
+            spatial: ["bbox"],
+          },
         },
         {
           access_id: "roads-xlsx",
@@ -413,10 +471,16 @@ describe("source-neutral MCP tools", () => {
       data_id: "roads",
       access_id: "roads-json",
       fields: [" id ", "name"],
+      filters: [
+        { field: " status ", operator: "in", value: ["open", "closed"] },
+        { field: "score", operator: "gte", value: 10 },
+      ],
       spatial: {
-        type: "point",
-        latitude: 53.3498,
-        longitude: -6.2603,
+        type: "bbox",
+        west: -10.7,
+        south: 51.3,
+        east: -5.4,
+        north: 55.5,
       },
       time_range: {
         start: "2026-10-10T01:00:00+01:00",
@@ -427,10 +491,16 @@ describe("source-neutral MCP tools", () => {
 
     const selectors = {
       fields: ["id", "name"],
+      filters: [
+        { field: "status", operator: "in", value: ["open", "closed"] },
+        { field: "score", operator: "gte", value: 10 },
+      ],
       spatial: {
-        type: "point" as const,
-        latitude: 53.3498,
-        longitude: -6.2603,
+        type: "bbox" as const,
+        west: -10.7,
+        south: 51.3,
+        east: -5.4,
+        north: 55.5,
       },
       time_range: {
         start: "2026-10-10T00:00:00.000Z",
@@ -494,6 +564,27 @@ describe("source-neutral MCP tools", () => {
     });
   });
 
+  it("rejects unsafe links returned by an adapter", async () => {
+    vi.mocked(dataGovAdapter.getDataLink).mockResolvedValueOnce({
+      ...dataLink,
+      url: "https://user:password@example.com/roads.xlsx",
+    });
+
+    const result = await callTool("get_data_link_by_id", {
+      source: "data_gov_ie",
+      data_id: "roads",
+      access_id: "roads-xlsx",
+    });
+
+    expect(result.isError).toBe(true);
+    expect(errorContent(result)).toEqual({
+      error: "UNSUPPORTED_OPERATION",
+      message:
+        "The requested access point does not provide a safe browser-openable link.",
+    });
+    expect(result.content).toHaveLength(1);
+  });
+
   it("serializes source and capability errors", async () => {
     const invalidSource = await callTool("describe_data_by_id", {
       source: "unknown",
@@ -546,6 +637,30 @@ describe("source-neutral MCP tools", () => {
       access_id: "roads-json",
       spatial: { type: "point", latitude: 91, longitude: -6 },
     });
+    const invalidFilters = await callTool("query_data_by_id", {
+      source: "data_gov_ie",
+      data_id: "roads",
+      access_id: "roads-json",
+      filters: [{ field: "status", operator: "in", value: [] }],
+    });
+    const invalidScalarFilter = await callTool("query_data_by_id", {
+      source: "data_gov_ie",
+      data_id: "roads",
+      access_id: "roads-json",
+      filters: [{ field: "score", operator: "gte", value: [10] }],
+    });
+    const invalidBoundingBox = await callTool("query_data_by_id", {
+      source: "data_gov_ie",
+      data_id: "roads",
+      access_id: "roads-json",
+      spatial: {
+        type: "bbox",
+        west: -5,
+        south: 54,
+        east: -10,
+        north: 52,
+      },
+    });
     const invalidTimeRange = await callTool("query_data_by_id", {
       source: "data_gov_ie",
       data_id: "roads",
@@ -581,7 +696,22 @@ describe("source-neutral MCP tools", () => {
     expect(errorContent(invalidSpatial)).toEqual({
       error: "INVALID_REQUEST",
       message:
-        'The "spatial" field must be a point with finite latitude (-90 to 90) and longitude (-180 to 180).',
+        'The "spatial" field must be a valid WGS84 point or bounding box with west < east and south < north.',
+    });
+    expect(errorContent(invalidFilters)).toEqual({
+      error: "INVALID_REQUEST",
+      message:
+        'The "filters" field must contain 1 to 20 typed filters; in accepts 1 to 100 scalar values.',
+    });
+    expect(errorContent(invalidScalarFilter)).toEqual({
+      error: "INVALID_REQUEST",
+      message:
+        'The "filters" field must contain 1 to 20 typed filters; in accepts 1 to 100 scalar values.',
+    });
+    expect(errorContent(invalidBoundingBox)).toEqual({
+      error: "INVALID_REQUEST",
+      message:
+        'The "spatial" field must be a valid WGS84 point or bounding box with west < east and south < north.',
     });
     expect(errorContent(invalidTimeRange)).toEqual({
       error: "INVALID_REQUEST",

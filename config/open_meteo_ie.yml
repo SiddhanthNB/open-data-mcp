@@ -1,4 +1,5 @@
 provider: open_meteo_ie
+enabled: false
 type: forecast_api
 authoritative: false
 coverage: Republic of Ireland point queries only

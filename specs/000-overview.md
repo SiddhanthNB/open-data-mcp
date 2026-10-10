@@ -5,7 +5,7 @@
 **Name:** Ireland Open Data MCP
 **Repository:** `ireland-open-data-mcp`
 
-Ireland Open Data MCP is a remote Model Context Protocol (MCP) server that provides a consistent interface for accessing publicly available Irish datasets.
+Ireland Open Data MCP is a remote Model Context Protocol (MCP) server that provides a consistent interface for accessing publicly available Irish and explicitly Ireland-scoped datasets.
 
 It acts strictly as a **data transport and access layer** between MCP-compatible clients and Irish open-data providers.
 
@@ -21,7 +21,10 @@ Provide MCP-compatible applications with a simple way to:
 - obtain browser-openable links to catalogued data
 - access multiple Irish open-data providers through one MCP interface
 
-The project is Ireland-specific.
+The project is Ireland-focused. Sources must state their geographic coverage and
+authority status. Northern Ireland data is exposed only through the explicit
+`open_data_ni` source and is not represented as Republic of Ireland government
+data.
 
 ## Primary Users
 
@@ -32,16 +35,28 @@ The project serves:
 
 Any MCP-compatible client should be able to connect.
 
-## Initial Data Sources
+## Data Sources
 
-The supported providers are:
+The supported sources are:
 
 - `data_gov_ie`
 - `smart_dublin`
 - `met_eireann`
 - `open_meteo_ie`
+- `cso_pxstat`
+- `marine_institute`
+- `geohive`
+- `opw`
+- `epa`
+- `tfi_nta`
+- `seai`
+- `eirgrid`
+- `open_data_ni`
 
-Additional Irish public-data providers may be added later.
+`seai` and `open_data_ni` reuse the scoped CKAN adapter. The other expanded
+sources use adapters for their upstream API shape. Provider support in source
+code does not by itself mean a source is cleared for deployment; operational
+gates are defined in `004-deployment.md`.
 
 `met_eireann` is the authoritative Irish weather source. `open_meteo_ie` is a
 non-authoritative ECMWF IFS model-forecast source restricted to point queries
@@ -78,7 +93,8 @@ Provider selection and querying are controlled through parameters such as:
 - access identifiers
 - limits
 - opaque cursors
-- optional field, point, and time-range selectors where a source supports them
+- optional field, typed filter, point, bounding-box, and time-range selectors
+  where a source supports them
 
 Provider-specific MCP tools must not be exposed.
 
@@ -140,23 +156,29 @@ A local proxy may be added later if required.
 
 ## Authentication
 
-Authentication is not required for core data access because the upstream datasets are public.
+Authentication is selected by `auth.mode` in `config/server.yml`:
 
-GitHub OAuth through Cloudflare may be introduced after the core MCP functionality is complete.
+- `none` for anonymous MCP access
+- `bearer` for one configured bearer token
+- `oauth` for MCP OAuth with GitHub as the identity provider
 
-Authentication remains separate from upstream provider access.
+Authentication protects access to the MCP server and remains separate from
+upstream provider access. GitHub is not treated as the MCP authorization server;
+the Worker exposes OAuth discovery and issues its own MCP tokens.
 
 ## Caching
 
-Metadata caching is planned for a later phase.
+Shared caching is not part of the core request path. It is required before
+deploying providers whose upstream policies need source-wide coordination.
 
-Likely cache candidates include:
+Cache candidates include:
 
 - dataset metadata
 - catalogue metadata
 - resource descriptions
 
-Live or frequently changing data should only be cached when an explicit freshness policy exists.
+Live or frequently changing data should only be cached when an explicit
+freshness or upstream-usage policy exists.
 
 ## Non-Goals
 

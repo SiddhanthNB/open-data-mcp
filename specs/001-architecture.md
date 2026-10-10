@@ -44,12 +44,25 @@ The core server is stateless and does not require Durable Objects.
 
 The router maps a source identifier to its provider adapter.
 
-Initial mappings:
+Provider configuration may explicitly set `enabled: false`. Disabled adapters
+are not initialized or returned by `list_sources`; direct calls return
+`SOURCE_DISABLED`. A missing `enabled` field defaults to enabled.
+
+Mappings:
 
 - `data_gov_ie` → DataGovAdapter
 - `smart_dublin` → SmartDublinAdapter
 - `met_eireann` → MetEireannAdapter
 - `open_meteo_ie` → OpenMeteoAdapter
+- `cso_pxstat` → CsoPxStatAdapter
+- `marine_institute` → MarineErddapAdapter
+- `geohive` → GeoHiveAdapter
+- `opw` → OpwAdapter
+- `epa` → EpaAdapter
+- `tfi_nta` → TfiNtaAdapter
+- `seai` → scoped CKAN adapter
+- `eirgrid` → EirGridAdapter
+- `open_data_ni` → scoped CKAN adapter
 
 Adding a new source should require:
 
@@ -81,6 +94,17 @@ Examples:
 - SmartDublinAdapter
 - MetEireannAdapter
 - OpenMeteoAdapter
+- CsoPxStatAdapter
+- MarineErddapAdapter
+- GeoHiveAdapter
+- OpwAdapter
+- EpaAdapter
+- TfiNtaAdapter
+- EirGridAdapter
+
+Sources with the same upstream protocol may reuse an adapter with separate
+validated configuration. `seai` and `open_data_ni` use the CKAN adapter with
+different catalogue scopes and coverage metadata.
 
 Responsibilities include:
 
@@ -100,7 +124,7 @@ Provider adapters locate resources.
 
 Resource handlers retrieve and convert them into MCP-friendly representations.
 
-Initial handler types may include:
+Shared handler types include:
 
 - CSV
 - JSON
@@ -114,6 +138,10 @@ Provider Adapter
 → structured response
 
 This prevents CSV, JSON, or XML parsing logic from being duplicated across providers.
+
+Large or non-queryable files are not streamed through the Worker. Their access
+points remain discoverable and `get_data_link_by_id` returns only the catalogued
+browser-openable URL.
 
 ## Response Normalization
 
@@ -152,9 +180,10 @@ Example structured query:
 6. MCP layer returns bounded data with an opaque continuation cursor when more
    data may be available.
 
-Forecast adapters use the same flow. They validate source-neutral field,
-WGS84 point, and RFC3339 time-range selectors, construct only their configured
-upstream request, and return bounded model or forecast data with provenance.
+Adapters use the same public flow. They may validate source-neutral field,
+typed filter, WGS84 point or bounding-box, and RFC3339 time-range selectors,
+then translate only the subset advertised by that access point. Unsupported
+selectors fail explicitly.
 
 Example link lookup:
 
@@ -169,6 +198,8 @@ Example link lookup:
 - MCP transport remains stateless.
 - Provider-specific logic stays inside adapters.
 - Format-specific logic stays inside resource handlers.
+- Access-point descriptions advertise query and link capabilities plus the
+  supported query schema.
 - One request targets one provider.
 - No cross-provider joins.
 - No analytics.

@@ -1,0 +1,21 @@
+provider: epa
+type: domain_api
+authoritative: true
+coverage: Republic of Ireland designated bathing waters
+description: EPA bathing-water locations, measurements and active alerts.
+base_url: https://data.epa.ie
+endpoints:
+  locations: https://data.epa.ie/bw/api/v1/locations
+  measurements: https://data.epa.ie/bw/api/v1/measurements
+  alerts: https://data.epa.ie/bw/api/v1/alerts
+http_timeout_ms: 10000
+pagination:
+  default_limit: 10
+  max_limit: 100
+capabilities:
+  search_data_by_source: true
+  describe_data_by_id: true
+  query_data_by_id: true
+  get_data_link_by_id: true
+formats:
+  - json

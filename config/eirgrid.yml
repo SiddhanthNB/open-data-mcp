@@ -1,0 +1,45 @@
+provider: eirgrid
+type: energy_api
+authoritative: true
+coverage: Republic of Ireland, Northern Ireland, or all-island as selected
+description: EirGrid quarter-hourly generation and interconnector time series.
+base_url: https://www.smartgriddashboard.com
+endpoints:
+  variable_generation: https://www.vargen.smartgriddashboard.com/api/export/{start}/{end}/{region}/{area}?FORMAT=JSON
+  interconnector: https://www.interconn.smartgriddashboard.com/api/Interconnector/{start}/{end}/ALL?format=json
+http_timeout_ms: 10000
+pagination:
+  default_limit: 10
+  max_limit: 100
+capabilities:
+  search_data_by_source: true
+  describe_data_by_id: true
+  query_data_by_id: true
+  get_data_link_by_id: false
+formats:
+  - json
+access_id: quarter_hourly
+attribution: Supported by EirGrid Group Data
+datasets:
+  - data_id: wind_generation
+    title: Wind generation
+    description: Actual and forecast wind generation for ROI, NI or ALL at 15-minute resolution. Upstream timestamps are Europe/Dublin local wall-clock values.
+    kind: variable_generation
+    area: WIND
+    endpoint_template: https://www.vargen.smartgriddashboard.com/api/export/{start}/{end}/{region}/{area}?FORMAT=JSON
+  - data_id: solar_generation
+    title: Solar generation
+    description: Actual and forecast large-scale solar generation for ROI, NI or ALL at 15-minute resolution. Upstream timestamps are Europe/Dublin local wall-clock values.
+    kind: variable_generation
+    area: SOLAR
+    endpoint_template: https://www.vargen.smartgriddashboard.com/api/export/{start}/{end}/{region}/{area}?FORMAT=JSON
+  - data_id: interconnector_flows
+    title: Interconnector flows
+    description: EWIC and Greenlink (ROI), Moyle (NI), and net all-island (ALL) flows at 15-minute resolution. Upstream timestamps are Europe/Dublin local wall-clock values; geographic modes remain separate.
+    kind: interconnector
+    endpoint_template: https://www.interconn.smartgriddashboard.com/api/Interconnector/{start}/{end}/ALL?format=json
+    allowed_field_names:
+      - INTER_EWIC
+      - INTER_GRNLK
+      - INTER_MOYLE
+      - INTER_NET

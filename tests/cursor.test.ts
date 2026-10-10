@@ -150,6 +150,72 @@ describe("opaque cursors", () => {
     });
   });
 
+  it("binds query cursors to typed filters and bounding boxes", () => {
+    const selectors = {
+      filters: [
+        {
+          field: "station",
+          operator: "in" as const,
+          value: ["Dublin", "Cork"],
+        },
+        { field: "depth", operator: "gte" as const, value: 10 },
+      ],
+      spatial: {
+        type: "bbox" as const,
+        west: -10.7,
+        south: 51.3,
+        east: -5.4,
+        north: 55.5,
+      },
+    };
+    const cursor = encodeQueryCursor(
+      "data_gov_ie",
+      "dataset-1",
+      "resource-1",
+      50,
+      selectors,
+    );
+
+    expect(
+      decodeQueryCursor(
+        cursor,
+        "data_gov_ie",
+        "dataset-1",
+        "resource-1",
+      ),
+    ).toEqual({ offset: 50, selectors });
+    expect(() =>
+      decodeQueryCursor(
+        cursor,
+        "data_gov_ie",
+        "dataset-1",
+        "resource-1",
+        {
+          filters: [
+            { field: "station", operator: "in", value: ["Galway"] },
+          ],
+        },
+      ),
+    ).toThrow('The "cursor" field is invalid or does not match this request.');
+    expect(() =>
+      decodeQueryCursor(
+        cursor,
+        "data_gov_ie",
+        "dataset-1",
+        "resource-1",
+        {
+          spatial: {
+            type: "bbox",
+            west: -9,
+            south: 52,
+            east: -6,
+            north: 54,
+          },
+        },
+      ),
+    ).toThrow('The "cursor" field is invalid or does not match this request.');
+  });
+
   it.each(["", "%%%", "bm90LWpzb24", "e30"])(
     "rejects malformed cursor %j",
     (cursor) => {

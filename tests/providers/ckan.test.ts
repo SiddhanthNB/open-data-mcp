@@ -157,6 +157,38 @@ function dependencies(
 }
 
 describe("shared CKAN adapter", () => {
+  it("rejects unsupported selectors before calling CKAN", async () => {
+    const upstream = queuedFetch();
+    const direct = recordingLoader();
+    const adapter = new DataGovAdapter(
+      config(),
+      dependencies(upstream.fetcher, direct.loader),
+    );
+
+    for (const selectors of [
+      { fields: ["value"] },
+      { filters: [{ field: "value", operator: "eq" as const, value: 1 }] },
+      { spatial: { type: "point" as const, latitude: 53, longitude: -6 } },
+      {
+        time_range: {
+          start: "2026-10-10T00:00:00.000Z",
+          end: "2026-10-10T01:00:00.000Z",
+        },
+      },
+    ]) {
+      await expect(
+        adapter.queryData({
+          data_id: "dataset-1",
+          access_id: "resource-json",
+          ...selectors,
+        }),
+      ).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+    }
+
+    expect(upstream.calls).toHaveLength(0);
+    expect(direct.calls).toHaveLength(0);
+  });
+
   it("translates search pagination and maps the common dataset model", async () => {
     const upstream = queuedFetch(
       success({ count: 42, results: [packageRecord()] }),

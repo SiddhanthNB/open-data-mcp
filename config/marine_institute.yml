@@ -1,0 +1,27 @@
+provider: marine_institute
+type: erddap
+authoritative: true
+coverage: Irish marine waters and wider Northeast Atlantic datasets
+description: Marine Institute ERDDAP catalogue, observations and model data.
+base_url: https://erddap.marine.ie/erddap
+endpoints:
+  search: /search/index.json
+  info: /info
+  tabledap: /tabledap
+  griddap: /griddap
+  files: /files
+http_timeout_ms: 20000
+pagination:
+  default_limit: 10
+  max_limit: 100
+capabilities:
+  search_data_by_source: true
+  describe_data_by_id: true
+  query_data_by_id: true
+  get_data_link_by_id: true
+formats:
+  - json
+  - netcdf
+  - csv
+max_schema_fields: 100
+max_selected_fields: 10

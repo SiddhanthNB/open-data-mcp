@@ -18,6 +18,23 @@ export const MET_EIREANN_FORECAST_ENDPOINT =
 export const MET_EIREANN_FORECAST_LICENCE_NOTICE =
   "Public websites displaying this forecast data must also display Met Éireann weather warnings and acknowledge Met Éireann as the source.";
 
+export const MET_EIREANN_FORECAST_FIELDS = [
+  "cloudiness",
+  "dewpointTemperature",
+  "globalRadiation",
+  "highClouds",
+  "humidity",
+  "lowClouds",
+  "mediumClouds",
+  "precipitation",
+  "pressure",
+  "symbol",
+  "temperature",
+  "windDirection",
+  "windGust",
+  "windSpeed",
+] as const;
+
 export interface ForecastBounds {
   minLatitude: number;
   maxLatitude: number;
@@ -189,6 +206,12 @@ function validateQuery(
   input: QueryDataInput,
   bounds: ForecastBounds,
 ): { latitude: number; longitude: number } {
+  if (input.filters !== undefined) {
+    throw new AppError(
+      "INVALID_REQUEST",
+      'The "filters" selector is not supported for Met Éireann forecasts.',
+    );
+  }
   const point = input.spatial;
   if (!point) {
     throw new AppError(
@@ -219,12 +242,14 @@ function validateQuery(
       input.fields.some(
         (field) =>
           typeof field !== "string" ||
-          !/^[A-Za-z_][A-Za-z0-9_.:-]*$/.test(field),
+          !MET_EIREANN_FORECAST_FIELDS.includes(
+            field as (typeof MET_EIREANN_FORECAST_FIELDS)[number],
+          ),
       )
     ) {
       throw new AppError(
         "INVALID_REQUEST",
-        'The "fields" values must be unique XML element names.',
+        'The "fields" values must be unique supported forecast element names.',
       );
     }
   }

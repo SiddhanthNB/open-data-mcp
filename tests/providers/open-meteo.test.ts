@@ -134,6 +134,19 @@ describe("Open-Meteo Ireland boundary", () => {
 });
 
 describe("OpenMeteoAdapter", () => {
+  it("rejects filters instead of silently ignoring them", async () => {
+    const upstream = recordingFetch(jsonResponse(forecastResponse()));
+    const instance = adapter(upstream.fetcher);
+
+    await expect(
+      instance.queryData({
+        ...validQuery(),
+        filters: [{ field: "temperature_2m", operator: "gte", value: 10 }],
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+    expect(upstream.calls).toHaveLength(0);
+  });
+
   it("rejects non-official endpoint settings", () => {
     const unsafe = config();
     unsafe.forecast.endpoint = "https://example.test/forecast";
@@ -169,9 +182,18 @@ describe("OpenMeteoAdapter", () => {
         {
           access_id: OPEN_METEO_ACCESS_ID,
           capabilities: { query: true, link: false },
+          query_schema: {
+            truncated: false,
+            spatial: ["point"],
+            supported_selectors: ["fields", "spatial", "time_range"],
+            required_selectors: ["fields", "spatial", "time_range"],
+          },
         },
       ],
     });
+    expect(description.access_points[0]?.query_schema?.fields.map(({ name }) => name)).toEqual(
+      OPEN_METEO_HOURLY_FIELDS,
+    );
     expect((await instance.searchData({ query: "marine" })).results).toEqual([]);
   });
 
@@ -229,6 +251,26 @@ describe("OpenMeteoAdapter", () => {
     await expect(instance.queryData({
       ...validQuery(),
       spatial: { type: "point", latitude: 54.5973, longitude: -5.93 },
+    })).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+    expect(called).toBe(false);
+  });
+
+  it("rejects bounding boxes without fetching", async () => {
+    let called = false;
+    const instance = adapter(async () => {
+      called = true;
+      return jsonResponse(forecastResponse());
+    });
+
+    await expect(instance.queryData({
+      ...validQuery(),
+      spatial: {
+        type: "bbox",
+        west: -10.7,
+        south: 51.3,
+        east: -5.4,
+        north: 55.5,
+      },
     })).rejects.toMatchObject({ code: "INVALID_REQUEST" });
     expect(called).toBe(false);
   });

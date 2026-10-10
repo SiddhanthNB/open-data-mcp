@@ -15,7 +15,7 @@ import {
   MAX_CURSOR_LENGTH,
 } from "../cursor";
 import { AppError } from "../errors";
-import { linkName } from "../links";
+import { isBrowserDataUrl, linkName } from "../links";
 import type {
   DataLink,
   DataSearchResult,
@@ -26,23 +26,28 @@ import type {
 import { enforceSerializedSize } from "../resources/limits";
 import type { SourceRouter } from "../router";
 
-const configuredProviders = Object.values(providerConfigs);
+const configuredProviders = Object.values(providerConfigs).filter(
+  (config) => config.enabled !== false,
+);
 const commonMaximumLimit = Math.min(
   ...configuredProviders.map((config) => config.pagination.max_limit),
+  100,
 );
 const configuredDefaults = configuredProviders
   .map((config) => `${config.provider}=${config.pagination.default_limit}`)
   .join(", ");
 const limitRange = `integer from 1 to ${commonMaximumLimit}`;
-const defaultLimitDescription = `Provider defaults: ${configuredDefaults}.`;
+const defaultLimitDescription = configuredDefaults
+  ? `Provider defaults: ${configuredDefaults}.`
+  : "No providers are currently enabled.";
 const maxFields = 10;
+const maxFilters = 20;
+const maxFilterValues = 100;
 
 const source = z
   .string()
   .min(1)
-  .describe(
-    "One source listed by list_sources, currently data_gov_ie, smart_dublin, met_eireann, or open_meteo_ie.",
-  );
+  .describe("One configured source ID returned by list_sources.");
 const limit = z
   .number()
   .int()
@@ -71,15 +76,57 @@ const fields = z
   .refine((values) => new Set(values).size === values.length)
   .optional()
   .describe(`Optional unique field names to return; maximum ${maxFields}.`);
-const spatial = z
+const filterScalar = z.union([
+  z.string(),
+  z.number().finite(),
+  z.boolean(),
+]);
+const filters = z
+  .array(
+    z.discriminatedUnion("operator", [
+      z
+        .object({
+          field: z.string().trim().min(1),
+          operator: z.literal("in"),
+          value: z.array(filterScalar).min(1).max(maxFilterValues),
+        })
+        .strict(),
+      z
+        .object({
+          field: z.string().trim().min(1),
+          operator: z.enum(["eq", "lt", "lte", "gt", "gte"]),
+          value: filterScalar,
+        })
+        .strict(),
+    ]),
+  )
+  .min(1)
+  .max(maxFilters)
+  .optional()
+  .describe(
+    `Optional typed filters; maximum ${maxFilters}. The in operator accepts 1 to ${maxFilterValues} scalar values.`,
+  );
+const spatialPoint = z
   .object({
     type: z.literal("point"),
     latitude: z.number().finite().min(-90).max(90),
     longitude: z.number().finite().min(-180).max(180),
   })
+  .strict();
+const spatialBoundingBox = z
+  .object({
+    type: z.literal("bbox"),
+    west: z.number().finite().min(-180).max(180),
+    south: z.number().finite().min(-90).max(90),
+    east: z.number().finite().min(-180).max(180),
+    north: z.number().finite().min(-90).max(90),
+  })
   .strict()
+  .refine((value) => value.west < value.east && value.south < value.north);
+const spatial = z
+  .discriminatedUnion("type", [spatialPoint, spatialBoundingBox])
   .optional()
-  .describe("Optional WGS84 point coordinates for spatial data sources.");
+  .describe("Optional WGS84 point coordinates or bounding box.");
 const rfc3339 = z.iso.datetime({ offset: true });
 const timeRange = z
   .object({
@@ -106,8 +153,9 @@ const validationMessages: Readonly<Record<string, string>> = {
   access_id:
     'The "access_id" field is required and must be a non-empty string.',
   fields: `The "fields" field must contain 1 to ${maxFields} unique, non-empty strings.`,
+  filters: `The "filters" field must contain 1 to ${maxFilters} typed filters; in accepts 1 to ${maxFilterValues} scalar values.`,
   spatial:
-    'The "spatial" field must be a point with finite latitude (-90 to 90) and longitude (-180 to 180).',
+    'The "spatial" field must be a valid WGS84 point or bounding box with west < east and south < north.',
   time_range:
     'The "time_range" field must contain RFC3339 start and end timestamps, with end after start.',
 };
@@ -177,7 +225,9 @@ function toolError(error: unknown): CallToolResult {
 
 async function execute(operation: () => Promise<object>): Promise<CallToolResult> {
   try {
-    return toolResult(await operation());
+    const value = await operation();
+    enforceSerializedSize(value, serverConfig.resources.max_output_bytes);
+    return toolResult(value);
   } catch (error) {
     return toolError(error);
   }
@@ -188,6 +238,12 @@ async function executeLink(
 ): Promise<CallToolResult> {
   try {
     const value = await operation();
+    if (!isBrowserDataUrl(value.url)) {
+      throw new AppError(
+        "UNSUPPORTED_OPERATION",
+        "The requested access point does not provide a safe browser-openable link.",
+      );
+    }
     enforceSerializedSize(value, serverConfig.resources.max_output_bytes);
     return linkToolResult(value);
   } catch (error) {
@@ -247,6 +303,7 @@ export function registerTools(server: McpServer, router: SourceRouter): void {
       data_id: dataId,
       access_id: accessId,
       fields,
+      filters,
       spatial,
       time_range: timeRange,
       limit,
@@ -265,7 +322,7 @@ export function registerTools(server: McpServer, router: SourceRouter): void {
     "list_sources",
     {
       description:
-        "List configured Irish public-data and Ireland-scoped sources with their type, authority status, geographic coverage, enabled capabilities, queryable formats, and configured limits.",
+        "List configured public-data and Ireland-scoped sources with their type, authority status, geographic coverage, enabled capabilities, formats, and configured limits.",
       inputSchema: advertisedSchema(listSourcesInput),
     },
     async (input) =>
@@ -324,7 +381,7 @@ export function registerTools(server: McpServer, router: SourceRouter): void {
     "query_data_by_id",
     {
       description:
-        `Return bounded structured data from one access point. Pass source, data_id, and access_id from describe_data_by_id. Sources may support optional field selection, point coordinates, and a bounded time range. Direct CSV, JSON, XML, and CKAN DataStore-backed access points are queryable. This tool never executes APIs described by OpenAPI documents. Use next_cursor to continue pageable data. Maximum limit: ${commonMaximumLimit}. ${defaultLimitDescription}`,
+        `Return bounded structured data from one access point. Pass source, data_id, and access_id from describe_data_by_id. Sources may support optional field selection, typed filters, point or bounding-box coordinates, and a bounded time range. Use the access point query_schema to determine supported selectors. This tool never executes APIs described by OpenAPI documents. Use next_cursor to continue pageable data. Maximum limit: ${commonMaximumLimit}. ${defaultLimitDescription}`,
       inputSchema: advertisedSchema(queryDataInput),
     },
     async (input) =>
@@ -336,6 +393,7 @@ export function registerTools(server: McpServer, router: SourceRouter): void {
           data_id,
           access_id,
           fields,
+          filters,
           spatial,
           time_range,
           limit,
@@ -348,7 +406,7 @@ export function registerTools(server: McpServer, router: SourceRouter): void {
             source,
             data_id,
             access_id,
-            { fields, spatial, time_range },
+            { fields, filters, spatial, time_range },
           );
           const result = await adapter.queryData({
             data_id,
@@ -357,18 +415,13 @@ export function registerTools(server: McpServer, router: SourceRouter): void {
             limit,
             offset: continuation.offset,
           });
-          const response = queryResponse(
+          return queryResponse(
             source,
             data_id,
             access_id,
             result,
             continuation.selectors,
           );
-          enforceSerializedSize(
-            response,
-            serverConfig.resources.max_output_bytes,
-          );
-          return response;
         },
       ),
   );
@@ -436,6 +489,7 @@ function queryResponse(
       ? page.offset + page.returned < page.total
       : page.returned === page.limit);
   const nextOffset = page ? page.offset + page.returned : 0;
+  const truncated = result.truncated === true || hasMore;
 
   return {
     source,
@@ -446,7 +500,7 @@ function queryResponse(
     pagination_supported: result.pagination_supported,
     ...(page ? { returned: page.returned } : {}),
     ...(page?.total !== undefined ? { total: page.total } : {}),
-    truncated: hasMore,
+    truncated,
     ...(hasMore
       ? {
           next_cursor: encodeQueryCursor(

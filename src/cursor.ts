@@ -1,13 +1,16 @@
 import { AppError } from "./errors";
 import {
   isSource,
+  QUERY_FILTER_OPERATORS,
+  type QueryFilter,
+  type QueryFilterScalar,
   type QuerySelectors,
   type Source,
-  type SpatialPoint,
+  type SpatialQuery,
   type TimeRange,
 } from "./models";
 
-const CURSOR_VERSION = 1;
+const CURSOR_VERSION = 2;
 export const MAX_CURSOR_LENGTH = 32_768;
 
 interface SearchCursor {
@@ -30,7 +33,8 @@ interface QueryCursor {
 
 interface CursorSelectors {
   fields: readonly string[] | null;
-  spatial: SpatialPoint | null;
+  filters: readonly QueryFilter[] | null;
+  spatial: SpatialQuery | null;
   time_range: TimeRange | null;
 }
 
@@ -200,6 +204,7 @@ function isOffset(value: unknown): value is number {
 function toCursorSelectors(selectors: QuerySelectors): CursorSelectors {
   return {
     fields: selectors.fields ? [...selectors.fields] : null,
+    filters: selectors.filters ? selectors.filters.map(cloneFilter) : null,
     spatial: selectors.spatial ? { ...selectors.spatial } : null,
     time_range: selectors.time_range
       ? {
@@ -210,6 +215,12 @@ function toCursorSelectors(selectors: QuerySelectors): CursorSelectors {
   };
 }
 
+function cloneFilter(filter: QueryFilter): QueryFilter {
+  return filter.operator === "in"
+    ? { ...filter, value: [...filter.value] }
+    : { ...filter };
+}
+
 function normalizeCursorTimestamp(value: string): string {
   const timestamp = Date.parse(value);
   return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : value;
@@ -218,6 +229,7 @@ function normalizeCursorTimestamp(value: string): string {
 function fromCursorSelectors(selectors: CursorSelectors): QuerySelectors {
   return {
     ...(selectors.fields ? { fields: selectors.fields } : {}),
+    ...(selectors.filters ? { filters: selectors.filters } : {}),
     ...(selectors.spatial ? { spatial: selectors.spatial } : {}),
     ...(selectors.time_range ? { time_range: selectors.time_range } : {}),
   };
@@ -232,6 +244,9 @@ function requestedSelectorsMatch(
     (requested.fields === undefined ||
       JSON.stringify(normalized.fields) ===
         JSON.stringify(cursorSelectors.fields)) &&
+    (requested.filters === undefined ||
+      JSON.stringify(normalized.filters) ===
+        JSON.stringify(cursorSelectors.filters)) &&
     (requested.spatial === undefined ||
       JSON.stringify(normalized.spatial) ===
         JSON.stringify(cursorSelectors.spatial)) &&
@@ -248,6 +263,7 @@ function isCursorSelectors(value: unknown): value is CursorSelectors {
     Array.isArray(value) ||
     !hasExactKeys(value as Record<string, unknown>, [
       "fields",
+      "filters",
       "spatial",
       "time_range",
     ])
@@ -258,7 +274,8 @@ function isCursorSelectors(value: unknown): value is CursorSelectors {
   const selectors = value as Record<string, unknown>;
   return (
     (selectors.fields === null || isFields(selectors.fields)) &&
-    (selectors.spatial === null || isSpatialPoint(selectors.spatial)) &&
+    (selectors.filters === null || isFilters(selectors.filters)) &&
+    (selectors.spatial === null || isSpatialQuery(selectors.spatial)) &&
     (selectors.time_range === null || isTimeRange(selectors.time_range))
   );
 }
@@ -278,31 +295,100 @@ function isFields(value: unknown): value is readonly string[] {
   );
 }
 
-function isSpatialPoint(value: unknown): value is SpatialPoint {
+function isFilters(value: unknown): value is readonly QueryFilter[] {
+  return (
+    Array.isArray(value) &&
+    value.length >= 1 &&
+    value.length <= 20 &&
+    value.every(isFilter)
+  );
+}
+
+function isFilter(value: unknown): value is QueryFilter {
   if (
     !value ||
     typeof value !== "object" ||
     Array.isArray(value) ||
     !hasExactKeys(value as Record<string, unknown>, [
-      "type",
-      "latitude",
-      "longitude",
+      "field",
+      "operator",
+      "value",
     ])
   ) {
     return false;
   }
 
-  const point = value as Record<string, unknown>;
+  const filter = value as Record<string, unknown>;
+  if (
+    typeof filter.field !== "string" ||
+    filter.field.length === 0 ||
+    filter.field !== filter.field.trim() ||
+    typeof filter.operator !== "string" ||
+    !QUERY_FILTER_OPERATORS.some((operator) => operator === filter.operator)
+  ) {
+    return false;
+  }
+
+  if (filter.operator === "in") {
+    return (
+      Array.isArray(filter.value) &&
+      filter.value.length >= 1 &&
+      filter.value.length <= 100 &&
+      filter.value.every(isFilterScalar)
+    );
+  }
+
+  return isFilterScalar(filter.value);
+}
+
+function isFilterScalar(value: unknown): value is QueryFilterScalar {
   return (
-    point.type === "point" &&
-    typeof point.latitude === "number" &&
-    Number.isFinite(point.latitude) &&
-    point.latitude >= -90 &&
-    point.latitude <= 90 &&
-    typeof point.longitude === "number" &&
-    Number.isFinite(point.longitude) &&
-    point.longitude >= -180 &&
-    point.longitude <= 180
+    typeof value === "string" ||
+    typeof value === "boolean" ||
+    (typeof value === "number" && Number.isFinite(value))
+  );
+}
+
+function isSpatialQuery(value: unknown): value is SpatialQuery {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value)
+  ) {
+    return false;
+  }
+
+  const spatial = value as Record<string, unknown>;
+  if (spatial.type === "point") {
+    return (
+      hasExactKeys(spatial, ["type", "latitude", "longitude"]) &&
+      isBoundedNumber(spatial.latitude, -90, 90) &&
+      isBoundedNumber(spatial.longitude, -180, 180)
+    );
+  }
+
+  return (
+    spatial.type === "bbox" &&
+    hasExactKeys(spatial, ["type", "west", "south", "east", "north"]) &&
+    isBoundedNumber(spatial.west, -180, 180) &&
+    isBoundedNumber(spatial.east, -180, 180) &&
+    isBoundedNumber(spatial.south, -90, 90) &&
+    isBoundedNumber(spatial.north, -90, 90) &&
+    spatial.west < spatial.east &&
+    spatial.south < spatial.north
+  );
+}
+
+function isBoundedNumber(
+  value: unknown,
+  minimum: number,
+  maximum: number,
+): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= minimum &&
+    value <= maximum
   );
 }
 

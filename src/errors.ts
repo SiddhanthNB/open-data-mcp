@@ -1,5 +1,6 @@
 export const ERROR_MESSAGES = {
   INVALID_SOURCE: "The requested source is not supported.",
+  SOURCE_DISABLED: "The requested source is disabled.",
   INVALID_REQUEST: "The request is invalid.",
   DATASET_NOT_FOUND: "The requested dataset could not be found.",
   RESOURCE_NOT_FOUND: "The requested resource could not be found.",

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { stringify } from "yaml";
 
 import {
   getProviderConfig,
@@ -7,7 +8,7 @@ import {
   providerConfigs,
   ProviderConfigError,
 } from "../src/config";
-import type { Source } from "../src/models";
+import { SOURCES, type Source } from "../src/models";
 
 function validConfig(provider: Source): string {
   if (provider === "open_meteo_ie") {
@@ -106,35 +107,17 @@ formats:
 }
 
 function allDocuments() {
-  return [
-    {
-      expectedProvider: "data_gov_ie" as const,
-      contents: validConfig("data_gov_ie"),
-    },
-    {
-      expectedProvider: "smart_dublin" as const,
-      contents: validConfig("smart_dublin"),
-    },
-    {
-      expectedProvider: "met_eireann" as const,
-      contents: validConfig("met_eireann"),
-    },
-    {
-      expectedProvider: "open_meteo_ie" as const,
-      contents: validConfig("open_meteo_ie"),
-    },
-  ];
+  return SOURCES.map((expectedProvider) => ({
+    expectedProvider,
+    contents: stringify(providerConfigs[expectedProvider]),
+  }));
 }
 
 describe("provider configuration", () => {
-  it("loads the four bundled provider configurations", () => {
-    expect(Object.keys(providerConfigs)).toEqual([
-      "data_gov_ie",
-      "smart_dublin",
-      "met_eireann",
-      "open_meteo_ie",
-    ]);
+  it("loads every bundled provider configuration", () => {
+    expect(Object.keys(providerConfigs)).toEqual(SOURCES);
     expect(getProviderConfig("data_gov_ie")).toMatchObject({
+      enabled: true,
       type: "catalogue",
       base_url: "https://data.gov.ie",
       http_timeout_ms: 10_000,
@@ -158,6 +141,7 @@ describe("provider configuration", () => {
         "http://openaccess.pf.api.met.ie/metno-wdb2ts/locationforecast",
     });
     expect(getProviderConfig("open_meteo_ie")).toMatchObject({
+      enabled: false,
       type: "forecast_api",
       authoritative: false,
       coverage: "Republic of Ireland point queries only",
@@ -168,6 +152,41 @@ describe("provider configuration", () => {
         max_fields: 10,
       },
     });
+    expect(getProviderConfig("seai")).toMatchObject({
+      type: "catalogue",
+      base_url: "https://data.gov.ie",
+      scope: {
+        organization_name: "sustainable-energy-authority-of-ireland",
+        organization_id: "sustainable-energy-authority-of-ireland",
+      },
+    });
+    expect(getProviderConfig("open_data_ni")).toMatchObject({
+      base_url: "https://admin.opendatani.gov.uk",
+      coverage: "Northern Ireland, United Kingdom",
+    });
+    expect(getProviderConfig("tfi_nta").capabilities.query_data_by_id).toBe(
+      false,
+    );
+    expect([
+      ...getProviderConfig("geohive").allowed_arcgis_hosts,
+      ...getProviderConfig("geohive").allowed_wms_hosts,
+    ]).toHaveLength(10);
+    expect(getProviderConfig("eirgrid")).toMatchObject({
+      coverage: "Republic of Ireland, Northern Ireland, or all-island as selected",
+      access_id: "quarter_hourly",
+    });
+  });
+
+  it("defaults providers to enabled and preserves an explicit false value", () => {
+    expect(
+      parseProviderConfig(validConfig("data_gov_ie"), "data_gov_ie").enabled,
+    ).toBe(true);
+
+    const disabled = validConfig("data_gov_ie").replace(
+      "type: catalogue",
+      "type: catalogue\nenabled: false",
+    );
+    expect(parseProviderConfig(disabled, "data_gov_ie").enabled).toBe(false);
   });
 
   it("returns deeply immutable configuration", () => {
@@ -182,6 +201,10 @@ describe("provider configuration", () => {
     expect(Object.isFrozen(getProviderConfig("open_meteo_ie").forecast)).toBe(
       true,
     );
+    expect(Object.isFrozen(getProviderConfig("eirgrid").datasets)).toBe(true);
+    expect(
+      Object.isFrozen(getProviderConfig("geohive").allowed_arcgis_hosts),
+    ).toBe(true);
   });
 
   it("rejects invalid YAML", () => {
@@ -216,7 +239,7 @@ describe("provider configuration", () => {
     );
 
     expect(() => parseProviderConfig(invalid, "data_gov_ie")).toThrow(
-      /base_url must use HTTPS/,
+      /URL must use HTTPS/,
     );
   });
 
@@ -263,8 +286,51 @@ describe("provider configuration", () => {
   });
 
   it("rejects incomplete provider document sets", () => {
-    expect(() => loadProviderConfigs(allDocuments().slice(0, 3))).toThrow(
-      "Missing configuration for provider(s): open_meteo_ie",
+    expect(() => loadProviderConfigs(allDocuments().slice(0, -1))).toThrow(
+      "Missing configuration for provider(s): open_data_ni",
+    );
+  });
+
+  it("rejects changes to fixed Phase 2 endpoints and settings", () => {
+    const marine = stringify({
+      ...providerConfigs.marine_institute,
+      base_url: "https://example.test/erddap",
+    });
+    const tfi = stringify({
+      ...providerConfigs.tfi_nta,
+      capabilities: {
+        ...providerConfigs.tfi_nta.capabilities,
+        query_data_by_id: true,
+      },
+    });
+    const opw = stringify({
+      ...providerConfigs.opw,
+      sensors: providerConfigs.opw.sensors.map((sensor) =>
+        sensor.access_id === "water_level"
+          ? { ...sensor, code: "0002" }
+          : sensor,
+      ),
+    });
+    const eirgrid = stringify({
+      ...providerConfigs.eirgrid,
+      datasets: providerConfigs.eirgrid.datasets.map((dataset) =>
+        dataset.data_id === "solar_generation"
+          ? { ...dataset, area: "WIND" }
+          : dataset,
+      ),
+    });
+
+    expect(() => parseProviderConfig(marine, "marine_institute")).toThrow(
+      /Invalid configuration for provider marine_institute/,
+    );
+    expect(() => parseProviderConfig(tfi, "tfi_nta")).toThrow(
+      /TFI realtime querying must remain disabled/,
+    );
+    expect(() => parseProviderConfig(opw, "opw")).toThrow(
+      /OPW sensors must match the documented sensor allowlist/,
+    );
+    expect(() => parseProviderConfig(eirgrid, "eirgrid")).toThrow(
+      /EirGrid datasets must match the three configured series/,
     );
   });
 });

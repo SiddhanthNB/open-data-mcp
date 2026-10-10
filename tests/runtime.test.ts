@@ -8,7 +8,6 @@ import type {
   ResourceLoader,
 } from "../src/providers/ckan/index";
 import { MetEireannAdapter } from "../src/providers/met-eireann";
-import { OpenMeteoAdapter } from "../src/providers/open-meteo";
 import { SmartDublinAdapter } from "../src/providers/smart-dublin";
 import { createSourceRouter, type RuntimeDependencies } from "../src/runtime";
 
@@ -26,21 +25,20 @@ function idleLoader(): ResourceLoader {
 }
 
 describe("runtime composition", () => {
-  it("registers configured operations for all four named adapters", () => {
+  it("registers configured operations for every source", () => {
     const router = createSourceRouter({
       resourceLoader: idleLoader(),
       ...RESOURCE_LIMITS,
     });
-    const expectedAdapters = {
-      data_gov_ie: DataGovAdapter,
-      smart_dublin: SmartDublinAdapter,
-      met_eireann: MetEireannAdapter,
-      open_meteo_ie: OpenMeteoAdapter,
-    } as const;
 
     for (const source of SOURCES) {
+      if (providerConfigs[source].enabled === false) {
+        for (const operation of PROVIDER_OPERATIONS) {
+          expect(() => router.resolve(source, operation)).toThrow();
+        }
+        continue;
+      }
       const adapter = router.resolve(source, "search_data_by_source");
-      expect(adapter).toBeInstanceOf(expectedAdapters[source]);
       expect(adapter.config).toBe(providerConfigs[source]);
 
       for (const operation of PROVIDER_OPERATIONS) {
@@ -51,6 +49,19 @@ describe("runtime composition", () => {
         }
       }
     }
+
+    expect(
+      router.resolve("data_gov_ie", "search_data_by_source"),
+    ).toBeInstanceOf(DataGovAdapter);
+    expect(
+      router.resolve("smart_dublin", "search_data_by_source"),
+    ).toBeInstanceOf(SmartDublinAdapter);
+    expect(
+      router.resolve("met_eireann", "search_data_by_source"),
+    ).toBeInstanceOf(MetEireannAdapter);
+    expect(() =>
+      router.resolve("open_meteo_ie", "search_data_by_source"),
+    ).toThrow();
   });
 
   it("keeps the configured Met Eireann catalogue scope", () => {
@@ -74,11 +85,10 @@ describe("runtime composition", () => {
     });
 
     const met = router.resolve("met_eireann", "query_data_by_id");
-    const openMeteo = router.resolve("open_meteo_ie", "query_data_by_id");
 
     expect(met.config.forecast).toEqual(providerConfigs.met_eireann.forecast);
-    expect(openMeteo.config).toBe(providerConfigs.open_meteo_ie);
-    expect(openMeteo.config).toMatchObject({
+    expect(providerConfigs.open_meteo_ie).toMatchObject({
+      enabled: false,
       type: "forecast_api",
       authoritative: false,
       forecast: {
@@ -94,12 +104,34 @@ describe("runtime composition", () => {
           coverage: "Republic of Ireland",
         }),
         expect.objectContaining({
-          source: "open_meteo_ie",
-          type: "forecast_api",
-          authoritative: false,
-          coverage: "Republic of Ireland point queries only",
+          source: "open_data_ni",
+          type: "catalogue",
+          authoritative: true,
+          coverage: "Northern Ireland, United Kingdom",
+        }),
+        expect.objectContaining({
+          source: "eirgrid",
+          type: "energy_api",
+          coverage:
+            "Republic of Ireland, Northern Ireland, or all-island as selected",
         }),
       ]),
+    );
+    expect(router.listSources()).not.toContainEqual(
+      expect.objectContaining({ source: "open_meteo_ie" }),
+    );
+  });
+
+  it("keeps TFI realtime queries and EirGrid dynamic links disabled", () => {
+    const router = createSourceRouter({
+      resourceLoader: idleLoader(),
+      ...RESOURCE_LIMITS,
+    });
+
+    expect(() => router.resolve("tfi_nta", "query_data_by_id")).toThrow();
+    expect(() => router.resolve("eirgrid", "get_data_link_by_id")).toThrow();
+    expect(router.resolve("tfi_nta", "get_data_link_by_id").config).toBe(
+      providerConfigs.tfi_nta,
     );
   });
 

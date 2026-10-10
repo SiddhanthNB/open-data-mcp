@@ -54,6 +54,15 @@ Provider configuration files are stored under:
 - `config/smart_dublin.yml`
 - `config/met_eireann.yml`
 - `config/open_meteo_ie.yml`
+- `config/cso_pxstat.yml`
+- `config/marine_institute.yml`
+- `config/geohive.yml`
+- `config/opw.yml`
+- `config/epa.yml`
+- `config/tfi_nta.yml`
+- `config/seai.yml`
+- `config/eirgrid.yml`
+- `config/open_data_ni.yml`
 
 Configuration should contain provider-specific operational settings and capabilities.
 
@@ -95,17 +104,19 @@ MCP Client
 
 ## Authentication
 
-Authentication is not required for the initial core service.
+`auth.mode` in `config/server.yml` selects `none`, `bearer`, or `oauth`.
 
-GitHub OAuth may be added later through Cloudflare as an access-control layer.
+- `none` leaves `/mcp` anonymous.
+- `bearer` checks one secret-backed bearer token.
+- `oauth` makes the Worker the MCP authorization server and uses GitHub as the
+  identity provider.
 
-OAuth protects access to the MCP server itself.
-
-It does not authenticate against the public-data providers.
+OAuth protects access to the MCP server itself. It does not authenticate
+against public-data providers and does not satisfy their rate or caching rules.
 
 ## GitHub OAuth
 
-When enabled, the flow should be:
+When enabled, the flow is:
 
 MCP Client  
 → OAuth authorization  
@@ -113,7 +124,12 @@ MCP Client
 → Cloudflare MCP server  
 → Public data provider
 
-OAuth must remain optional and separate from core provider functionality.
+The Worker exposes OAuth discovery, authorization, dynamic registration, token,
+and revocation endpoints. OAuth state and grants use the `OAUTH_KV` binding.
+GitHub client credentials are Worker secrets. Detailed setup is documented in
+`docs/authentication.md`.
+
+OAuth remains optional and separate from core provider functionality.
 
 ## Availability
 
@@ -151,9 +167,8 @@ Logging should use Worker-compatible console output and structured fields where 
 
 ## Caching
 
-Caching is not required for the initial deployment.
-
-A later phase may introduce Cloudflare caching for stable metadata.
+The generic core does not require caching. Some expanded sources require shared
+cache or rate coordination before they can be enabled in a public deployment.
 
 Potential cache targets include:
 
@@ -161,18 +176,31 @@ Potential cache targets include:
 - catalogue responses
 - resource descriptions
 
-Live data should not be cached without an explicit freshness policy.
+Live data should not be cached without an explicit freshness or upstream-usage
+policy. Per-instance memory is not sufficient for source-wide limits on a
+stateless Worker.
 
-## Forecast Deployment Gates
+## Deployment Gates
 
-The new forecast capabilities must not be deployed until both gates are met:
+The expanded source set must not be deployed publicly until its applicable
+gates are cleared:
 
 1. Met Éireann weather-warning display and attribution requirements are
    implemented for the intended public client experience.
-2. Source-wide Open-Meteo rate limiting is implemented so limits apply across
-   Worker instances rather than only inside one stateless request.
+2. Source-wide Open-Meteo rate limiting is implemented across Worker instances.
+3. Marine Institute ERDDAP live connectivity and response compatibility are
+   verified from the deployment environment.
+4. OPW uses the required shared 15-minute cache and continues filtering station
+   references according to the upstream publishing conditions.
+5. TFI/NTA realtime access remains disabled until an API key, shared cache,
+   one-call-per-minute coordination, and live payload validation exist.
+6. EirGrid endpoint stability and upstream rate behaviour are verified.
+7. Per-record or per-dataset licences and attribution remain visible for
+   GeoHive, Marine, OpenDataNI, and other mixed-licence catalogues.
+8. Existing high-severity audit findings in the Cloudflare Agents/MCP dependency
+   chain are reviewed without applying a breaking automatic downgrade.
 
-These gates do not block local tests. OAuth does not replace either gate.
+These gates do not block local or mocked tests. OAuth does not replace them.
 
 ## Deployment Principles
 
@@ -187,4 +215,4 @@ These gates do not block local tests. OAuth does not replace either gate.
 - no traditional server process
 - no Durable Object dependency required for core functionality
 - no database dependency required for core functionality
-- authentication remains optional
+- authentication mode remains independent of providers
