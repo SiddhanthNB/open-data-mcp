@@ -229,7 +229,7 @@ gates are cleared:
 1. Met Éireann weather-warning display and attribution requirements are
    implemented for the intended public client experience.
 2. Source-wide Open-Meteo rate limiting is validated using the deployed Upstash
-   credentials before `open_meteo_ie` is enabled.
+   credentials (`open_meteo_ie` is enabled; it fails closed without Redis).
 3. Marine Institute ERDDAP live connectivity and response compatibility are
    verified from the deployment environment.
 4. OPW uses the required shared 15-minute cache and continues filtering station
@@ -241,6 +241,9 @@ gates are cleared:
    GeoHive, Marine, OpenDataNI, and other mixed-licence catalogues.
 8. Existing high-severity audit findings in the Cloudflare Agents/MCP dependency
    chain are reviewed without applying a breaking automatic downgrade.
+
+`geohive`, `opw`, `eirgrid` and `epa` are in the works and set to
+`enabled: false` for now. Gates 4 and 6 apply before they are enabled.
 
 These gates do not block local or mocked tests. OAuth does not replace them.
 

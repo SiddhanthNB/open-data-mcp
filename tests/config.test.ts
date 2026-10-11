@@ -141,7 +141,7 @@ describe("provider configuration", () => {
         "http://openaccess.pf.api.met.ie/metno-wdb2ts/locationforecast",
     });
     expect(getProviderConfig("open_meteo_ie")).toMatchObject({
-      enabled: false,
+      enabled: true,
       type: "forecast_api",
       authoritative: false,
       coverage: "Republic of Ireland point queries only",

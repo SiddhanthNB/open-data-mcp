@@ -1,4 +1,5 @@
 provider: epa
+enabled: false
 type: domain_api
 authoritative: true
 coverage: Republic of Ireland designated bathing waters

@@ -1,4 +1,5 @@
 provider: geohive
+enabled: false
 type: geospatial_catalogue
 authoritative: true
 coverage: Republic of Ireland

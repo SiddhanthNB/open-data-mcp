@@ -1,4 +1,5 @@
 provider: eirgrid
+enabled: false
 type: energy_api
 authoritative: true
 coverage: Republic of Ireland, Northern Ireland, or all-island as selected

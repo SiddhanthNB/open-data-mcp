@@ -235,7 +235,7 @@ The primary limits use rolling sliding windows:
 
 OAuth endpoints are limited to 20 requests per minute per Cloudflare client IP.
 
-The disabled `open_meteo_ie` source has additional global limits of 500 requests
+The `open_meteo_ie` source has additional global limits of 500 requests
 per minute, 4,000 per hour, and 8,000 per 24 hours. It must fail closed when the
 shared Redis limiter is unavailable.
 

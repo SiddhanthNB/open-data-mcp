@@ -60,7 +60,7 @@ describe("runtime composition", () => {
       router.resolve("met_eireann", "search_data_by_source"),
     ).toBeInstanceOf(MetEireannAdapter);
     expect(() =>
-      router.resolve("open_meteo_ie", "search_data_by_source"),
+      router.resolve("geohive", "search_data_by_source"),
     ).toThrow();
   });
 
@@ -88,7 +88,7 @@ describe("runtime composition", () => {
 
     expect(met.config.forecast).toEqual(providerConfigs.met_eireann.forecast);
     expect(providerConfigs.open_meteo_ie).toMatchObject({
-      enabled: false,
+      enabled: true,
       type: "forecast_api",
       authoritative: false,
       forecast: {
@@ -110,15 +110,14 @@ describe("runtime composition", () => {
           coverage: "Northern Ireland, United Kingdom",
         }),
         expect.objectContaining({
-          source: "eirgrid",
-          type: "energy_api",
-          coverage:
-            "Republic of Ireland, Northern Ireland, or all-island as selected",
+          source: "open_meteo_ie",
+          type: "forecast_api",
+          authoritative: false,
         }),
       ]),
     );
     expect(router.listSources()).not.toContainEqual(
-      expect.objectContaining({ source: "open_meteo_ie" }),
+      expect.objectContaining({ source: "eirgrid" }),
     );
   });
 

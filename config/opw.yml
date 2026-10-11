@@ -1,4 +1,5 @@
 provider: opw
+enabled: false
 type: station_timeseries
 authoritative: true
 coverage: Republic of Ireland monitoring stations

@@ -437,7 +437,7 @@ describe("source-neutral MCP tools", () => {
         },
         providers: {
           open_meteo_ie: {
-            enabled: false,
+            enabled: true,
             scope: "global",
             requests_per_minute: 500,
             requests_per_hour: 4_000,

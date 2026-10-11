@@ -210,8 +210,8 @@ provenance.
 
 Open-Meteo is operated by Open-Meteo GmbH, not an Irish public body. Its data is
 non-authoritative model output, not observations or an official Irish forecast.
-It must remain visibly distinct from Met Éireann. The source is configured with
-`enabled: false` until shared rate limiting is available.
+It must remain visibly distinct from Met Éireann. The source is enabled and
+protected by the shared global rate limit.
 
 ## CSO PxStat
 
