@@ -46,7 +46,9 @@ be encoded into either identifier. Clients obtain `data_id` from search and
 
 Lists configured sources and their source type, authority status, geographic
 coverage, description, enabled capabilities, queryable formats, default limit,
-and maximum limit.
+maximum limit, and structured request-rate limits. Provider-specific limits are
+included even when that provider is disabled, so clients can plan before it is
+enabled.
 
 This tool takes no inputs. Its response is derived from provider configuration.
 
@@ -223,6 +225,24 @@ the common advertised maximum are rejected during tool validation. Provider
 adapters also enforce their own configured maximum.
 
 The current provider configurations use a maximum limit of 100.
+
+Only valid tool executions consume request limits. Initialization, tool
+discovery, ping, and requests rejected by input validation do not consume them.
+The primary limits use rolling sliding windows:
+
+- per authenticated user: 60 requests per minute and 1,000 per 24 hours
+- entire MCP service: 300 requests per minute and 20,000 per 24 hours
+
+OAuth endpoints are limited to 20 requests per minute per Cloudflare client IP.
+
+The disabled `open_meteo_ie` source has additional global limits of 500 requests
+per minute, 4,000 per hour, and 8,000 per 24 hours. It must fail closed when the
+shared Redis limiter is unavailable.
+
+Upstash Redis coordinates limits across Worker locations. Cloudflare's native
+rate-limit bindings run first and act as the fallback for general MCP and OAuth
+limits when Redis is unavailable. `RATE_LIMITED` is returned when a limit is
+exhausted.
 
 ## Standard Response Metadata
 

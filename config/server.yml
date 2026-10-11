@@ -1,7 +1,7 @@
 auth:
   mode: oauth
   bearer:
-    token_env: MCP_BEARER_TOKEN
+    token_env: OPEN_DATA_MCP_BEARER_TOKEN
   oauth:
     public_base_url: https://ireland-open-data-mcp.ireland-open-data-mcp.workers.dev
     authorize_path: /authorize
@@ -13,8 +13,8 @@ auth:
     required_scopes:
       - mcp:read
     github:
-      client_id_env: GITHUB_CLIENT_ID
-      client_secret_env: GITHUB_CLIENT_SECRET
+      client_id_env: OPEN_DATA_MCP_GITHUB_OAUTH_CLIENT_ID
+      client_secret_env: OPEN_DATA_MCP_GITHUB_OAUTH_CLIENT_SECRET
       authorize_url: https://github.com/login/oauth/authorize
       token_url: https://github.com/login/oauth/access_token
       user_url: https://api.github.com/user
@@ -22,3 +22,22 @@ auth:
 resources:
   max_input_bytes: 5242880
   max_output_bytes: 1048576
+rate_limits:
+  redis:
+    url_env: UPSTASH_REDIS_REST_URL
+    token_env: UPSTASH_REDIS_REST_TOKEN
+    timeout_ms: 1000
+    key_prefix: ireland-open-data-mcp
+  user:
+    requests_per_minute: 60
+    requests_per_24_hours: 1000
+  global:
+    requests_per_minute: 300
+    requests_per_24_hours: 20000
+  oauth:
+    requests_per_minute_per_ip: 20
+  providers:
+    open_meteo_ie:
+      requests_per_minute: 500
+      requests_per_hour: 4000
+      requests_per_24_hours: 8000

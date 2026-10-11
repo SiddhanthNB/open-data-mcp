@@ -1,9 +1,16 @@
 import { McpServer } from "@modelcontextprotocol/server";
 
 import type { SourceRouter } from "./router";
+import {
+  getNoRateLimitService,
+  type RateLimitService,
+} from "./rate-limit";
 import { registerTools } from "./tools/register";
 
-export function createServer(router: SourceRouter): McpServer {
+export function createServer(
+  router: SourceRouter,
+  rateLimiter: RateLimitService = getNoRateLimitService(),
+): McpServer {
   const server = new McpServer(
     {
       name: "ireland-open-data-mcp",
@@ -14,7 +21,7 @@ export function createServer(router: SourceRouter): McpServer {
     },
   );
 
-  registerTools(server, router);
+  registerTools(server, router, rateLimiter);
 
   return server;
 }

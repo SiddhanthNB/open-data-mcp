@@ -25,6 +25,7 @@ Responsible for:
 - calling the provider abstraction
 - returning standardized responses
 - returning standardized errors
+- enforcing shared tool-execution limits after input validation
 
 The MCP layer must not contain provider-specific logic.
 
@@ -39,6 +40,12 @@ The MCP layer is implemented as a TypeScript Cloudflare Worker:
 - a fresh MCP server instance is created for each request
 
 The core server is stateless and does not require Durable Objects.
+
+Valid tool executions use configuration-driven sliding-window limits backed by
+Upstash Redis. The authenticated GitHub user ID is the per-user key. Cloudflare
+Workers Rate Limiting bindings run first and provide a per-location fallback
+when Redis is unavailable. Initialization, tool discovery, and ping do not
+consume tool limits.
 
 ## 2. Source Router
 

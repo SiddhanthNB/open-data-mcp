@@ -27,8 +27,8 @@ Republic of Ireland and Ireland-scoped sources:
 - `tfi_nta`, `seai`, `eirgrid`
 
 `open_data_ni` is explicitly Northern Ireland, UK. `open_meteo_ie` is
-non-authoritative model output and is currently disabled until shared rate
-limiting is configured; Met Éireann is the authoritative Irish weather source.
+non-authoritative model output and is currently disabled until its deployed
+shared rate limits are validated; Met Éireann is the authoritative Irish weather source.
 Sources are never silently merged.
 
 Each provider YAML may set `enabled: false` to omit that source. When the field
@@ -67,6 +67,10 @@ npx wrangler deploy --dry-run
 ```bash
 npm run deploy
 ```
+
+Publishing a `v*` Git tag runs checks and deploys that tagged commit through
+GitHub Actions. Configure the repository secrets `CLOUDFLARE_API_TOKEN` and
+`CLOUDFLARE_ACCOUNT_ID` first.
 
 Runtime: Cloudflare Workers, TypeScript, stateless Streamable HTTP at `/mcp`,
 and YAML-configured provider adapters.

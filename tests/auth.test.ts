@@ -16,6 +16,7 @@ import {
   serverConfig,
   type AuthConfig,
 } from "../src/config";
+import type { RateLimitService } from "../src/rate-limit";
 
 const publicBaseUrl = "https://mcp.example.test";
 const bearerToken = "test-bearer-token-with-at-least-32-characters";
@@ -201,8 +202,8 @@ async function dispatchGitHubCallback(
     ),
     {
       OAUTH_PROVIDER: callbackOAuth(),
-      GITHUB_CLIENT_ID: "github-client-id",
-      GITHUB_CLIENT_SECRET:
+      OPEN_DATA_MCP_GITHUB_OAUTH_CLIENT_ID: "github-client-id",
+      OPEN_DATA_MCP_GITHUB_OAUTH_CLIENT_SECRET:
         "github-client-secret-with-at-least-32-characters",
     },
   );
@@ -213,7 +214,7 @@ function serverConfigYaml(mode: string, timeoutMs = 10_000): string {
 auth:
   mode: ${mode}
   bearer:
-    token_env: MCP_BEARER_TOKEN
+    token_env: OPEN_DATA_MCP_BEARER_TOKEN
   oauth:
     public_base_url: https://example.test
     authorize_path: /authorize
@@ -223,8 +224,8 @@ auth:
     scopes_supported: [mcp:read]
     required_scopes: [mcp:read]
     github:
-      client_id_env: GITHUB_CLIENT_ID
-      client_secret_env: GITHUB_CLIENT_SECRET
+      client_id_env: OPEN_DATA_MCP_GITHUB_OAUTH_CLIENT_ID
+      client_secret_env: OPEN_DATA_MCP_GITHUB_OAUTH_CLIENT_SECRET
       authorize_url: https://github.com/login/oauth/authorize
       token_url: https://github.com/login/oauth/access_token
       user_url: https://api.github.com/user
@@ -232,6 +233,25 @@ auth:
 resources:
   max_input_bytes: 5242880
   max_output_bytes: 1048576
+rate_limits:
+  redis:
+    url_env: UPSTASH_REDIS_REST_URL
+    token_env: UPSTASH_REDIS_REST_TOKEN
+    timeout_ms: 1000
+    key_prefix: ireland-open-data-mcp
+  user:
+    requests_per_minute: 60
+    requests_per_24_hours: 1000
+  global:
+    requests_per_minute: 300
+    requests_per_24_hours: 20000
+  oauth:
+    requests_per_minute_per_ip: 20
+  providers:
+    open_meteo_ie:
+      requests_per_minute: 500
+      requests_per_hour: 4000
+      requests_per_24_hours: 8000
 `;
 }
 
@@ -242,6 +262,17 @@ describe("server auth configuration", () => {
     expect(serverConfig.resources).toEqual({
       max_input_bytes: 5_242_880,
       max_output_bytes: 1_048_576,
+    });
+    expect(serverConfig.rate_limits).toMatchObject({
+      user: {
+        requests_per_minute: 60,
+        requests_per_24_hours: 1_000,
+      },
+      global: {
+        requests_per_minute: 300,
+        requests_per_24_hours: 20_000,
+      },
+      oauth: { requests_per_minute_per_ip: 20 },
     });
     expect(Object.isFrozen(serverConfig)).toBe(true);
     expect(Object.isFrozen(serverConfig.auth.oauth)).toBe(true);
@@ -257,6 +288,25 @@ describe("server auth configuration", () => {
     expect(() => parseServerConfig(serverConfigYaml("none", 0))).toThrow(
       /Invalid server configuration/,
     );
+  });
+
+  it("rejects invalid or contradictory request limits", () => {
+    expect(() =>
+      parseServerConfig(
+        serverConfigYaml("none").replace(
+          "requests_per_minute: 60",
+          "requests_per_minute: 0",
+        ),
+      ),
+    ).toThrow(/Invalid server configuration/);
+    expect(() =>
+      parseServerConfig(
+        serverConfigYaml("none").replace(
+          "requests_per_minute: 300",
+          "requests_per_minute: 50",
+        ),
+      ),
+    ).toThrow(/global minute limit must not be lower than user limit/);
   });
 });
 
@@ -281,7 +331,7 @@ describe("auth modes", () => {
   it("challenges missing or invalid manual bearer tokens", async () => {
     const mcp = createMcpHandler();
     const handler = createAuthHandler(configFor("bearer"), mcp.handler);
-    const requestEnv = { MCP_BEARER_TOKEN: bearerToken };
+    const requestEnv = { OPEN_DATA_MCP_BEARER_TOKEN: bearerToken };
 
     for (const authorization of [undefined, "Basic abc", "Bearer wrong"]) {
       const headers =
@@ -303,7 +353,7 @@ describe("auth modes", () => {
   it("accepts the configured bearer token without protecting other routes", async () => {
     const mcp = createMcpHandler();
     const handler = createAuthHandler(configFor("bearer"), mcp.handler);
-    const requestEnv = { MCP_BEARER_TOKEN: bearerToken };
+    const requestEnv = { OPEN_DATA_MCP_BEARER_TOKEN: bearerToken };
 
     const authorized = await dispatch(
       handler,
@@ -398,6 +448,35 @@ describe("auth modes", () => {
     expect(mcp.fetch).not.toHaveBeenCalled();
   });
 
+  it("rate limits OAuth endpoints by Cloudflare client IP", async () => {
+    const mcp = createMcpHandler();
+    const rateLimiter = {
+      limitTool: vi.fn(async () => undefined),
+      limitOAuth: vi.fn(async () => false),
+    } satisfies RateLimitService;
+    const handler = createAuthHandler(configFor("oauth"), mcp.handler, {
+      rateLimiter,
+    });
+    const requestEnv = { OAUTH_KV: oauthKv.binding };
+
+    const response = await dispatch(
+      handler,
+      new Request(`${publicBaseUrl}/.well-known/oauth-authorization-server`, {
+        headers: { "CF-Connecting-IP": "192.0.2.1" },
+      }),
+      requestEnv,
+    );
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("Retry-After")).toBe("60");
+    await expect(response.json()).resolves.toEqual({ error: "RATE_LIMITED" });
+    expect(rateLimiter.limitOAuth).toHaveBeenCalledWith(
+      requestEnv,
+      "192.0.2.1",
+    );
+    expect(mcp.fetch).not.toHaveBeenCalled();
+  });
+
   it("rejects an OAuth callback without library-managed state", async () => {
     const mcp = createMcpHandler();
     const handler = createAuthHandler(configFor("oauth"), mcp.handler);
@@ -465,7 +544,7 @@ describe("auth modes", () => {
       new Request(`${publicBaseUrl}/oauth/callback?code=github-code&state=state`),
       {
         OAUTH_PROVIDER: oauth,
-        GITHUB_CLIENT_ID: "github-client-id",
+        OPEN_DATA_MCP_GITHUB_OAUTH_CLIENT_ID: "github-client-id",
       },
     );
 
@@ -570,8 +649,9 @@ describe("auth modes", () => {
     );
     const requestEnv = {
       OAUTH_KV: oauthKv.binding,
-      GITHUB_CLIENT_ID: "github-client-id",
-      GITHUB_CLIENT_SECRET: "github-client-secret-with-at-least-32-characters",
+      OPEN_DATA_MCP_GITHUB_OAUTH_CLIENT_ID: "github-client-id",
+      OPEN_DATA_MCP_GITHUB_OAUTH_CLIENT_SECRET:
+        "github-client-secret-with-at-least-32-characters",
     };
     const redirectUri = "https://client.example/callback";
     const registered = await dispatch(

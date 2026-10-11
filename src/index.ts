@@ -1,4 +1,5 @@
 import { createMcpHandler } from "agents/mcp/server";
+import { env as workerEnvironment } from "cloudflare:workers";
 
 import {
   createAuthHandler,
@@ -7,6 +8,11 @@ import {
 } from "./auth";
 import { serverConfig, type AuthConfig } from "./config";
 import { DirectResourceLoader } from "./resources";
+import {
+  createRateLimitService,
+  type RateLimitEnvironment,
+  type RateLimitService,
+} from "./rate-limit";
 import { createSourceRouter } from "./runtime";
 import { createServer } from "./server";
 
@@ -14,6 +20,7 @@ export interface WorkerDependencies {
   fetch?: typeof globalThis.fetch;
   now?: () => Date;
   authConfig?: AuthConfig;
+  rateLimiter?: RateLimitService;
 }
 
 export function createWorkerHandler(
@@ -33,7 +40,13 @@ export function createWorkerHandler(
     ...(dependencies.fetch ? { fetch: dependencies.fetch } : {}),
     ...(dependencies.now ? { now: dependencies.now } : {}),
   });
-  const handleMcp = createMcpHandler(() => createServer(router), {
+  const rateLimiter =
+    dependencies.rateLimiter ??
+    createRateLimitService(serverConfig.rate_limits, {
+      environment: () =>
+        workerEnvironment as unknown as RateLimitEnvironment,
+    });
+  const handleMcp = createMcpHandler(() => createServer(router, rateLimiter), {
     route: "/mcp",
     legacy: "stateless",
   });
@@ -47,6 +60,10 @@ export function createWorkerHandler(
   return createAuthHandler(
     dependencies.authConfig ?? serverConfig.auth,
     mcpHandler,
+    {
+      ...(dependencies.fetch ? { fetch: dependencies.fetch } : {}),
+      rateLimiter,
+    },
   );
 }
 

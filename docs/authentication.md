@@ -10,10 +10,10 @@ The checked-in configuration uses `oauth`.
 
 ## Bearer
 
-`bearer` requires `Authorization: Bearer <token>` on `/mcp`. Set a random token of at least 32 characters locally as `MCP_BEARER_TOKEN`, or in production with:
+`bearer` requires `Authorization: Bearer <token>` on `/mcp`. Set a random token of at least 32 characters locally as `OPEN_DATA_MCP_BEARER_TOKEN`, or in production with:
 
 ```sh
-npx wrangler secret put MCP_BEARER_TOKEN
+npx wrangler secret put OPEN_DATA_MCP_BEARER_TOKEN
 ```
 
 This mode is for manually provisioned automation. It does not expose OAuth discovery and does not use HTTP Basic authentication.
@@ -42,8 +42,8 @@ Before enabling it:
 6. Add production secrets:
 
 ```sh
-npx wrangler secret put GITHUB_CLIENT_ID
-npx wrangler secret put GITHUB_CLIENT_SECRET
+npx wrangler secret put OPEN_DATA_MCP_GITHUB_OAUTH_CLIENT_ID
+npx wrangler secret put OPEN_DATA_MCP_GITHUB_OAUTH_CLIENT_SECRET
 ```
 
 For local development, copy `.env.example` to `.env` and set real values there. The default `http://127.0.0.1:8787` public base URL is allowed only for local loopback development.

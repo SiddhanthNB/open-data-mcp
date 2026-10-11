@@ -34,6 +34,9 @@ Dependencies should be kept minimal and locked to compatible versions.
 
 Packages must be compatible with the Cloudflare Workers runtime. Node.js-only APIs, native add-ons, and dependencies that require a traditional server process should be avoided.
 
+Shared sliding-window rate limiting uses the Worker-compatible Upstash REST
+clients. It does not require a TCP Redis connection.
+
 ## Deployment Flow
 
 Expected flow:
@@ -45,6 +48,11 @@ Expected flow:
 5. Validate the MCP tools at `/mcp`.
 6. Deploy with `wrangler deploy`.
 7. Test the deployed remote MCP endpoint.
+
+Production releases use `.github/workflows/ci-cd.yml`. Pushing a `v*` tag runs
+the locked install, typecheck, tests, and Wrangler dry-run against that tagged
+commit. Deployment runs only after those checks pass, using the GitHub Actions
+repository secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`.
 
 ## Configuration
 
@@ -85,6 +93,8 @@ Examples include:
 - OAuth client secrets
 - future upstream API keys
 - other credentials
+- `UPSTASH_REDIS_REST_URL`
+- `UPSTASH_REDIS_REST_TOKEN`
 
 Secrets must never be stored in YAML configuration files or source code.
 
@@ -130,6 +140,24 @@ GitHub client credentials are Worker secrets. Detailed setup is documented in
 `docs/authentication.md`.
 
 OAuth remains optional and separate from core provider functionality.
+
+## Rate Limiting
+
+Valid MCP tool executions are checked against Cloudflare Workers Rate Limiting
+bindings and Upstash Redis. Cloudflare bindings provide fast per-location
+minute limits. Redis provides shared rolling minute and 24-hour user and global
+limits across Worker locations.
+
+The native bindings are:
+
+- `MCP_USER_RATE_LIMITER` — 60 requests per minute per user
+- `MCP_GLOBAL_RATE_LIMITER` — 300 requests per minute for the service
+- `OAUTH_RATE_LIMITER` — 20 requests per minute per client IP
+
+If Redis is unavailable, general tool and OAuth traffic may continue only when
+the corresponding Cloudflare check succeeds. If both mechanisms are
+unavailable, the request fails closed. `open_meteo_ie` always fails closed when
+Redis is unavailable because its upstream quota must be coordinated globally.
 
 ## Availability
 
@@ -187,7 +215,8 @@ gates are cleared:
 
 1. Met Éireann weather-warning display and attribution requirements are
    implemented for the intended public client experience.
-2. Source-wide Open-Meteo rate limiting is implemented across Worker instances.
+2. Source-wide Open-Meteo rate limiting is validated using the deployed Upstash
+   credentials before `open_meteo_ie` is enabled.
 3. Marine Institute ERDDAP live connectivity and response compatibility are
    verified from the deployment environment.
 4. OPW uses the required shared 15-minute cache and continues filtering station
@@ -214,5 +243,5 @@ These gates do not block local or mocked tests. OAuth does not replace them.
 - minimal dependencies
 - no traditional server process
 - no Durable Object dependency required for core functionality
-- no database dependency required for core functionality
+- shared Redis rate limiting with Cloudflare-native fallback
 - authentication mode remains independent of providers

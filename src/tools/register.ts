@@ -24,6 +24,7 @@ import type {
   Source,
 } from "../models";
 import { enforceSerializedSize } from "../resources/limits";
+import type { RateLimitService, ToolRateLimitInput } from "../rate-limit";
 import type { SourceRouter } from "../router";
 
 const configuredProviders = Object.values(providerConfigs).filter(
@@ -40,9 +41,38 @@ const limitRange = `integer from 1 to ${commonMaximumLimit}`;
 const defaultLimitDescription = configuredDefaults
   ? `Provider defaults: ${configuredDefaults}.`
   : "No providers are currently enabled.";
+const rateLimitDescription =
+  `Valid tool executions are limited to ${serverConfig.rate_limits.user.requests_per_minute} per rolling minute and ${serverConfig.rate_limits.user.requests_per_24_hours} per rolling 24 hours per user; service-wide limits are ${serverConfig.rate_limits.global.requests_per_minute} per rolling minute and ${serverConfig.rate_limits.global.requests_per_24_hours} per rolling 24 hours. open_meteo_ie additionally has global limits of ${serverConfig.rate_limits.providers.open_meteo_ie.requests_per_minute} per minute, ${serverConfig.rate_limits.providers.open_meteo_ie.requests_per_hour} per hour, and ${serverConfig.rate_limits.providers.open_meteo_ie.requests_per_24_hours} per 24 hours.`;
 const maxFields = 10;
 const maxFilters = 20;
 const maxFilterValues = 100;
+
+function publicRateLimits(): object {
+  const limits = serverConfig.rate_limits;
+  return {
+    algorithm: "sliding_window",
+    fallback: "cloudflare_native_per_location",
+    per_user: {
+      requests_per_minute: limits.user.requests_per_minute,
+      requests_per_24_hours: limits.user.requests_per_24_hours,
+    },
+    global: {
+      requests_per_minute: limits.global.requests_per_minute,
+      requests_per_24_hours: limits.global.requests_per_24_hours,
+    },
+    providers: {
+      open_meteo_ie: {
+        enabled: providerConfigs.open_meteo_ie.enabled !== false,
+        scope: "global",
+        requests_per_minute:
+          limits.providers.open_meteo_ie.requests_per_minute,
+        requests_per_hour: limits.providers.open_meteo_ie.requests_per_hour,
+        requests_per_24_hours:
+          limits.providers.open_meteo_ie.requests_per_24_hours,
+      },
+    },
+  };
+}
 
 const source = z
   .string()
@@ -255,6 +285,7 @@ async function executeValidated<T>(
   schema: z.ZodType<T>,
   input: unknown,
   operation: (input: T) => Promise<object>,
+  rateLimiter: RateLimitService,
 ): Promise<CallToolResult> {
   const parsed = schema.safeParse(input);
   if (!parsed.success) {
@@ -263,13 +294,17 @@ async function executeValidated<T>(
     );
   }
 
-  return execute(() => operation(parsed.data));
+  return execute(async () => {
+    await rateLimiter.limitTool(rateLimitInput(parsed.data));
+    return operation(parsed.data);
+  });
 }
 
 async function executeValidatedLink<T>(
   schema: z.ZodType<T>,
   input: unknown,
   operation: (input: T) => Promise<DataLink>,
+  rateLimiter: RateLimitService,
 ): Promise<CallToolResult> {
   const parsed = schema.safeParse(input);
   if (!parsed.success) {
@@ -278,10 +313,29 @@ async function executeValidatedLink<T>(
     );
   }
 
-  return executeLink(() => operation(parsed.data));
+  return executeLink(async () => {
+    await rateLimiter.limitTool(rateLimitInput(parsed.data));
+    return operation(parsed.data);
+  });
 }
 
-export function registerTools(server: McpServer, router: SourceRouter): void {
+function rateLimitInput(value: unknown): ToolRateLimitInput {
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    "source" in value &&
+    typeof value.source === "string"
+  ) {
+    return { source: value.source };
+  }
+  return {};
+}
+
+export function registerTools(
+  server: McpServer,
+  router: SourceRouter,
+  rateLimiter: RateLimitService,
+): void {
   const listSourcesInput = z.object({}).strict();
   const searchDataInput = z
     .object({
@@ -322,20 +376,26 @@ export function registerTools(server: McpServer, router: SourceRouter): void {
     "list_sources",
     {
       description:
-        "List configured public-data and Ireland-scoped sources with their type, authority status, geographic coverage, enabled capabilities, formats, and configured limits.",
+        `List configured public-data and Ireland-scoped sources with their type, authority status, geographic coverage, enabled capabilities, formats, pagination limits, and structured request-rate limits. ${rateLimitDescription}`,
       inputSchema: advertisedSchema(listSourcesInput),
     },
     async (input) =>
-      executeValidated(listSourcesInput, input, async () => ({
-        sources: router.listSources(),
-      })),
+      executeValidated(
+        listSourcesInput,
+        input,
+        async () => ({
+          sources: router.listSources(),
+          rate_limits: publicRateLimits(),
+        }),
+        rateLimiter,
+      ),
   );
 
   server.registerTool(
     "search_data_by_source",
     {
       description:
-        `Search one source and return source-neutral data_id values. Results may overlap between catalogues because source selects the upstream representation. Use next_cursor to continue without handling provider offsets. Maximum limit: ${commonMaximumLimit}. ${defaultLimitDescription}`,
+        `Search one source and return source-neutral data_id values. Results may overlap between catalogues because source selects the upstream representation. Use next_cursor to continue without handling provider offsets. Maximum limit: ${commonMaximumLimit}. ${defaultLimitDescription} ${rateLimitDescription}`,
       inputSchema: advertisedSchema(searchDataInput),
     },
     async (input) =>
@@ -356,6 +416,7 @@ export function registerTools(server: McpServer, router: SourceRouter): void {
           });
           return searchResponse(source, continuation.query, result);
         },
+        rateLimiter,
       ),
   );
 
@@ -363,7 +424,7 @@ export function registerTools(server: McpServer, router: SourceRouter): void {
     "describe_data_by_id",
     {
       description:
-        "Describe one logical data object. Use a data_id from search_data_by_source. Access points expose independent query and link capabilities; unsupported query formats remain discoverable.",
+        `Describe one logical data object. Use a data_id from search_data_by_source. Access points expose independent query and link capabilities; unsupported query formats remain discoverable. ${rateLimitDescription}`,
       inputSchema: advertisedSchema(describeDataInput),
     },
     async (input) =>
@@ -374,6 +435,7 @@ export function registerTools(server: McpServer, router: SourceRouter): void {
           const adapter = router.resolve(source, "describe_data_by_id");
           return adapter.describeData({ data_id });
         },
+        rateLimiter,
       ),
   );
 
@@ -381,7 +443,7 @@ export function registerTools(server: McpServer, router: SourceRouter): void {
     "query_data_by_id",
     {
       description:
-        `Return bounded structured data from one access point. Pass source, data_id, and access_id from describe_data_by_id. Sources may support optional field selection, typed filters, point or bounding-box coordinates, and a bounded time range. Use the access point query_schema to determine supported selectors. This tool never executes APIs described by OpenAPI documents. Use next_cursor to continue pageable data. Maximum limit: ${commonMaximumLimit}. ${defaultLimitDescription}`,
+        `Return bounded structured data from one access point. Pass source, data_id, and access_id from describe_data_by_id. Sources may support optional field selection, typed filters, point or bounding-box coordinates, and a bounded time range. Use the access point query_schema to determine supported selectors. This tool never executes APIs described by OpenAPI documents. Use next_cursor to continue pageable data. Maximum limit: ${commonMaximumLimit}. ${defaultLimitDescription} ${rateLimitDescription}`,
       inputSchema: advertisedSchema(queryDataInput),
     },
     async (input) =>
@@ -423,6 +485,7 @@ export function registerTools(server: McpServer, router: SourceRouter): void {
             continuation.selectors,
           );
         },
+        rateLimiter,
       ),
   );
 
@@ -430,7 +493,7 @@ export function registerTools(server: McpServer, router: SourceRouter): void {
     "get_data_link_by_id",
     {
       description:
-        "Return metadata plus a clickable MCP resource_link for a catalogued access point. The tool does not fetch, stream, parse, or preview the linked bytes and accepts no arbitrary URL.",
+        `Return metadata plus a clickable MCP resource_link for a catalogued access point. The tool does not fetch, stream, parse, or preview the linked bytes and accepts no arbitrary URL. ${rateLimitDescription}`,
       inputSchema: advertisedSchema(getDataLinkInput),
     },
     async (input) =>
@@ -444,6 +507,7 @@ export function registerTools(server: McpServer, router: SourceRouter): void {
             access_id,
           });
         },
+        rateLimiter,
       ),
   );
 }

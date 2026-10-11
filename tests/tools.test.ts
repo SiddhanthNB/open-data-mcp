@@ -1,7 +1,7 @@
 import { createMcpHandler } from "agents/mcp/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { providerConfigs } from "../src/config";
+import { providerConfigs, serverConfig } from "../src/config";
 import { SOURCES } from "../src/models";
 import type {
   DataLink,
@@ -20,6 +20,10 @@ import type {
   SearchDataInput,
 } from "../src/providers/provider";
 import { SourceRouter } from "../src/router";
+import {
+  createRateLimitService,
+  type RateLimitService,
+} from "../src/rate-limit";
 import { createServer } from "../src/server";
 
 const commonMaximumLimit = Math.min(
@@ -183,7 +187,11 @@ const router = new SourceRouter([
   openMeteoAdapter,
   ...remainingAdapters,
 ]);
-const handler = createMcpHandler(() => createServer(router), {
+const rateLimiter = {
+  limitTool: vi.fn(async () => undefined),
+  limitOAuth: vi.fn(async () => true),
+} satisfies RateLimitService;
+const handler = createMcpHandler(() => createServer(router, rateLimiter), {
   route: "/mcp",
   legacy: "stateless",
 });
@@ -192,8 +200,9 @@ async function sendMcpRequest(
   method: string,
   params: Record<string, unknown>,
   id: number,
+  requestHandler: typeof handler = handler,
 ): Promise<{ response: Response; payload: JsonRpcResponse }> {
-  const response = await handler.fetch(
+  const response = await requestHandler.fetch(
     new Request("http://example.com/mcp", {
       method: "POST",
       headers: {
@@ -263,6 +272,12 @@ describe("source-neutral MCP tools", () => {
     const query = payload.result?.tools?.find(
       (tool) => tool.name === "query_data_by_id",
     );
+    expect(search?.description).toContain(
+      "60 per rolling minute and 1000 per rolling 24 hours per user",
+    );
+    expect(search?.description).toContain(
+      "open_meteo_ie additionally has global limits of 500 per minute, 4000 per hour, and 8000 per 24 hours",
+    );
     expect(search?.inputSchema.required).toEqual(["source"]);
     expect(search?.inputSchema.properties).not.toHaveProperty("offset");
     expect(search?.inputSchema.properties?.limit).toMatchObject({
@@ -294,6 +309,65 @@ describe("source-neutral MCP tools", () => {
     expect(query?.inputSchema.properties?.time_range).toMatchObject({
       type: "object",
     });
+    expect(rateLimiter.limitTool).not.toHaveBeenCalled();
+  });
+
+  it("limits valid tool executions but not discovery or invalid input", async () => {
+    await sendMcpRequest("tools/list", {}, 1);
+    await callTool("search_data_by_source", {
+      source: "data_gov_ie",
+      limit: 0,
+    });
+    expect(rateLimiter.limitTool).not.toHaveBeenCalled();
+
+    await callTool("search_data_by_source", { source: "data_gov_ie" });
+    expect(rateLimiter.limitTool).toHaveBeenCalledOnce();
+    expect(rateLimiter.limitTool).toHaveBeenCalledWith({
+      source: "data_gov_ie",
+    });
+  });
+
+  it("uses the authenticated GitHub user ID as the tool limit key", async () => {
+    const userMinute = { limit: vi.fn(async () => ({ success: true })) };
+    const allow = () => ({ limit: vi.fn(async () => ({ success: true })) });
+    const authenticatedRateLimiter = createRateLimitService(
+      serverConfig.rate_limits,
+      {
+        environment: () => ({
+          UPSTASH_REDIS_REST_URL: "https://redis.example.test",
+          UPSTASH_REDIS_REST_TOKEN: "token",
+          MCP_USER_RATE_LIMITER: allow(),
+          MCP_GLOBAL_RATE_LIMITER: allow(),
+        }),
+        createRedisLimiters: () => ({
+          userMinute,
+          userDay: allow(),
+          globalMinute: allow(),
+          globalDay: allow(),
+          oauthMinute: allow(),
+          openMeteoMinute: allow(),
+          openMeteoHour: allow(),
+          openMeteoDay: allow(),
+        }),
+      },
+    );
+    const authenticatedHandler = createMcpHandler(
+      () => createServer(router, authenticatedRateLimiter),
+      {
+        route: "/mcp",
+        legacy: "stateless",
+        authContext: { props: { github_user_id: "456" } },
+      },
+    );
+
+    await sendMcpRequest(
+      "tools/call",
+      { name: "list_sources", arguments: {} },
+      2,
+      authenticatedHandler,
+    );
+
+    expect(userMinute.limit).toHaveBeenCalledWith("github:456");
   });
 
   it("enforces the shared output limit for non-query responses", async () => {
@@ -322,8 +396,29 @@ describe("source-neutral MCP tools", () => {
   it("lists configuration-driven source capabilities", async () => {
     const result = await callTool("list_sources", {});
 
-    expect(result.structuredContent).toEqual({
+    expect(result.structuredContent).toMatchObject({
       sources: router.listSources(),
+      rate_limits: {
+        algorithm: "sliding_window",
+        fallback: "cloudflare_native_per_location",
+        per_user: {
+          requests_per_minute: 60,
+          requests_per_24_hours: 1_000,
+        },
+        global: {
+          requests_per_minute: 300,
+          requests_per_24_hours: 20_000,
+        },
+        providers: {
+          open_meteo_ie: {
+            enabled: false,
+            scope: "global",
+            requests_per_minute: 500,
+            requests_per_hour: 4_000,
+            requests_per_24_hours: 8_000,
+          },
+        },
+      },
     });
     expect(result.structuredContent?.sources).toHaveLength(SOURCES.length);
     expect(result.structuredContent?.sources).toContainEqual(

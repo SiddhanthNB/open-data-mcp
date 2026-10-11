@@ -30,6 +30,17 @@ const scopeSchema = z.array(z.string().min(1)).min(1).refine(
   "scopes must not contain duplicates",
 );
 
+const rateLimitPairSchema = z
+  .object({
+    requests_per_minute: z.number().int().positive(),
+    requests_per_24_hours: z.number().int().positive(),
+  })
+  .strict();
+
+const providerRateLimitSchema = rateLimitPairSchema.extend({
+  requests_per_hour: z.number().int().positive(),
+});
+
 const serverConfigSchema = z
   .object({
     auth: z
@@ -93,6 +104,52 @@ const serverConfigSchema = z
         max_output_bytes: z.number().int().positive(),
       })
       .strict(),
+    rate_limits: z
+      .object({
+        redis: z
+          .object({
+            url_env: envNameSchema,
+            token_env: envNameSchema,
+            timeout_ms: z.number().int().positive(),
+            key_prefix: z.string().regex(/^[a-z0-9][a-z0-9:-]*$/),
+          })
+          .strict(),
+        user: rateLimitPairSchema,
+        global: rateLimitPairSchema,
+        oauth: z
+          .object({
+            requests_per_minute_per_ip: z.number().int().positive(),
+          })
+          .strict(),
+        providers: z
+          .object({
+            open_meteo_ie: providerRateLimitSchema,
+          })
+          .strict(),
+      })
+      .strict()
+      .superRefine((limits, context) => {
+        if (
+          limits.global.requests_per_minute <
+          limits.user.requests_per_minute
+        ) {
+          context.addIssue({
+            code: "custom",
+            message: "global minute limit must not be lower than user limit",
+            path: ["global", "requests_per_minute"],
+          });
+        }
+        if (
+          limits.global.requests_per_24_hours <
+          limits.user.requests_per_24_hours
+        ) {
+          context.addIssue({
+            code: "custom",
+            message: "global 24-hour limit must not be lower than user limit",
+            path: ["global", "requests_per_24_hours"],
+          });
+        }
+      }),
   })
   .strict();
 

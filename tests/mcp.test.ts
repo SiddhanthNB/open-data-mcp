@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { WorkerHandler } from "../src/auth";
 import { serverConfig } from "../src/config";
 import { createWorkerHandler } from "../src/index";
+import { getNoRateLimitService } from "../src/rate-limit";
 
 type JsonRpcResponse = {
   result?: Record<string, unknown> & {
@@ -28,6 +29,7 @@ const protocolVersion = "2025-11-25";
 const anonymousAuthConfig = { ...serverConfig.auth, mode: "none" as const };
 const anonymousWorker = createWorkerHandler({
   authConfig: anonymousAuthConfig,
+  rateLimiter: getNoRateLimitService(),
 });
 
 async function sendMcpRequest(
@@ -157,6 +159,7 @@ describe("stateless MCP Worker", () => {
       fetch: fetcher,
       now: () => new Date("2026-10-04T14:00:00.000Z"),
       authConfig: anonymousAuthConfig,
+      rateLimiter: getNoRateLimitService(),
     });
 
     const first = await sendMcpRequest(
