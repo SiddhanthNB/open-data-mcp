@@ -13,8 +13,8 @@ export function createServer(
 ): McpServer {
   const server = new McpServer(
     {
-      name: "ireland-open-data-mcp",
-      version: "0.0.0",
+      name: "open-data-mcp",
+      version: "0.1.0",
     },
     {
       capabilities: { tools: {} },

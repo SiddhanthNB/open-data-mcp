@@ -2,7 +2,7 @@
 
 ## Overview
 
-Ireland Open Data MCP uses a layered architecture so MCP clients remain independent from the implementation details of each public-data provider.
+Open Data MCP uses a layered architecture so MCP clients remain independent from the implementation details of each public-data provider.
 
 The main flow is:
 

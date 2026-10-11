@@ -238,7 +238,7 @@ rate_limits:
     url_env: UPSTASH_REDIS_REST_URL
     token_env: UPSTASH_REDIS_REST_TOKEN
     timeout_ms: 1000
-    key_prefix: ireland-open-data-mcp
+    key_prefix: open-data-mcp
   user:
     requests_per_minute: 60
     requests_per_24_hours: 1000
@@ -344,7 +344,7 @@ describe("auth modes", () => {
 
       expect(response.status).toBe(401);
       expect(response.headers.get("WWW-Authenticate")).toBe(
-        'Bearer realm="Ireland Open Data MCP"',
+        'Bearer realm="Open Data MCP"',
       );
     }
     expect(mcp.fetch).not.toHaveBeenCalled();
@@ -445,6 +445,21 @@ describe("auth modes", () => {
       code_challenge_methods_supported: ["S256"],
     });
     expect(unrelated.status).toBe(404);
+    expect(mcp.fetch).not.toHaveBeenCalled();
+  });
+
+  it("protects the MCP path when the request origin differs from the canonical origin", async () => {
+    const mcp = createMcpHandler();
+    const handler = createAuthHandler(configFor("oauth"), mcp.handler);
+
+    const response = await dispatch(
+      handler,
+      new Request("http://127.0.0.1:8787/mcp", { method: "POST" }),
+      { OAUTH_KV: oauthKv.binding },
+    );
+
+    expect(response.status).toBe(401);
+    expect(response.headers.get("WWW-Authenticate")).toContain("Bearer");
     expect(mcp.fetch).not.toHaveBeenCalled();
   });
 

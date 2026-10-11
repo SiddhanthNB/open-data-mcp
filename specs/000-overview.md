@@ -1,11 +1,11 @@
-# Ireland Open Data MCP — Overview
+# Open Data MCP — Overview
 
 ## Project
 
-**Name:** Ireland Open Data MCP
-**Repository:** `ireland-open-data-mcp`
+**Name:** Open Data MCP
+**Repository:** `open-data-mcp`
 
-Ireland Open Data MCP is a remote Model Context Protocol (MCP) server that provides a consistent interface for accessing publicly available Irish and explicitly Ireland-scoped datasets.
+Open Data MCP is a remote Model Context Protocol (MCP) server that provides a consistent interface for accessing publicly available Irish and explicitly Ireland-scoped datasets.
 
 It acts strictly as a **data transport and access layer** between MCP-compatible clients and Irish open-data providers.
 
@@ -182,7 +182,7 @@ freshness or upstream-usage policy exists.
 
 ## Non-Goals
 
-Ireland Open Data MCP is not:
+Open Data MCP is not:
 
 - an AI assistant
 - a chatbot

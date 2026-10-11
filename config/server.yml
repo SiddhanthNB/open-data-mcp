@@ -3,7 +3,7 @@ auth:
   bearer:
     token_env: OPEN_DATA_MCP_BEARER_TOKEN
   oauth:
-    public_base_url: https://ireland-open-data-mcp.ireland-open-data-mcp.workers.dev
+    public_base_url: https://open-data-mcp.siddhanthnb.workers.dev
     authorize_path: /authorize
     callback_path: /oauth/callback
     token_path: /oauth/token
@@ -27,7 +27,7 @@ rate_limits:
     url_env: UPSTASH_REDIS_REST_URL
     token_env: UPSTASH_REDIS_REST_TOKEN
     timeout_ms: 1000
-    key_prefix: ireland-open-data-mcp
+    key_prefix: open-data-mcp
   user:
     requests_per_minute: 60
     requests_per_24_hours: 1000

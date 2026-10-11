@@ -1,4 +1,4 @@
-# Ireland Open Data MCP
+# Open Data MCP
 
 Read-only Irish public data through one remote MCP endpoint.
 
@@ -49,7 +49,7 @@ npm run dev
 ```
 
 MCP endpoint:
-`https://ireland-open-data-mcp.ireland-open-data-mcp.workers.dev/mcp`
+`https://open-data-mcp.siddhanthnb.workers.dev/mcp`
 
 Authentication is selected in `config/server.yml`. See
 [`docs/authentication.md`](docs/authentication.md).
@@ -69,8 +69,8 @@ npm run deploy
 ```
 
 Publishing a `v*` Git tag runs checks and deploys that tagged commit through
-GitHub Actions. Configure the repository secrets `CLOUDFLARE_API_TOKEN` and
-`CLOUDFLARE_ACCOUNT_ID` first.
+GitHub Actions. Configure the repository secrets
+`OPEN_DATA_MCP_CLOUDFLARE_DEPLOY_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` first.
 
 Runtime: Cloudflare Workers, TypeScript, stateless Streamable HTTP at `/mcp`,
 and YAML-configured provider adapters.

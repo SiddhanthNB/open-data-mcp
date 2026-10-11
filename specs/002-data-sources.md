@@ -2,7 +2,7 @@
 
 ## Overview
 
-Ireland Open Data MCP supports thirteen sources:
+Open Data MCP supports thirteen sources:
 
 - `data_gov_ie`
 - `smart_dublin`

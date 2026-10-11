@@ -29,7 +29,7 @@ import {
 } from "./logger";
 import { WorkerContextManager } from "./context";
 
-export const SERVICE_NAME = "ireland-open-data-mcp";
+export const SERVICE_NAME = "open-data-mcp";
 const appScope = SERVICE_NAME;
 const httpScope = `${SERVICE_NAME}.library.http`;
 const redisScope = `${SERVICE_NAME}.library.redis`;

@@ -36,7 +36,7 @@ function bearerChallenge(): Response {
     {
       status: 401,
       headers: {
-        "WWW-Authenticate": 'Bearer realm="Ireland Open Data MCP"',
+        "WWW-Authenticate": 'Bearer realm="Open Data MCP"',
       },
     },
   );

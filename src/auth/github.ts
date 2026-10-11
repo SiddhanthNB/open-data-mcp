@@ -46,7 +46,7 @@ function consentPage(details: ConsentDescription, handle: string): string {
   return `<!doctype html>
 <meta charset="utf-8">
 <title>Authorize ${escapeHtml(details.clientName)}</title>
-<h1>Allow ${escapeHtml(details.clientName)} to access Ireland Open Data MCP?</h1>
+<h1>Allow ${escapeHtml(details.clientName)} to access Open Data MCP?</h1>
 <p>${clientSource} Access will be sent to <strong>${escapeHtml(details.redirectHost)}</strong>.</p>
 ${loopbackWarning}
 <form method="post">
@@ -216,7 +216,7 @@ async function getGitHubUser(
       headers: {
         Accept: "application/vnd.github+json",
         Authorization: `Bearer ${accessToken}`,
-        "User-Agent": "ireland-open-data-mcp",
+        "User-Agent": "open-data-mcp",
         "X-GitHub-Api-Version": "2022-11-28",
       },
     },

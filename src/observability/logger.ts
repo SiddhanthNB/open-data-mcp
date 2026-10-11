@@ -14,7 +14,7 @@ export interface LogIdentifiers {
   readonly spanId: string;
 }
 
-const logLevelKey = createContextKey("ireland-open-data-mcp.log-level");
+const logLevelKey = createContextKey("open-data-mcp.log-level");
 const severityOrder: Readonly<Record<LogSeverity, number>> = {
   debug: 10,
   info: 20,

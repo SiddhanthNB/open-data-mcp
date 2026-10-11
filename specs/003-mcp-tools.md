@@ -2,7 +2,7 @@
 
 ## Overview
 
-Ireland Open Data MCP exposes exactly five provider-independent tools:
+Open Data MCP exposes exactly five provider-independent tools:
 
 1. `list_sources`
 2. `search_data_by_source`

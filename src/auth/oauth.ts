@@ -70,7 +70,7 @@ export function createOAuthHandler(
     },
   };
   const provider = new OAuthProvider<AuthEnv>({
-    apiRoute: resource,
+    apiRoute: "/mcp",
     apiHandler,
     defaultHandler: createGitHubIdentityHandler(
       config,
@@ -89,7 +89,7 @@ export function createOAuthHandler(
     resourceMetadata: {
       resource,
       authorization_servers: [config.public_base_url],
-      resource_name: "Ireland Open Data MCP",
+      resource_name: "Open Data MCP",
     },
     requiredScopes: [...config.required_scopes],
     clientIdMetadataDocumentEnabled: true,

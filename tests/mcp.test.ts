@@ -97,7 +97,7 @@ describe("stateless MCP Worker", () => {
     expect(initialized.payload.error).toBeUndefined();
     expect(initialized.payload.result).toMatchObject({
       protocolVersion,
-      serverInfo: { name: "ireland-open-data-mcp" },
+      serverInfo: { name: "open-data-mcp", version: "0.1.0" },
     });
 
     const listed = await sendMcpRequest("tools/list", {}, 2);

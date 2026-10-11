@@ -49,7 +49,7 @@ function readableSpan(overrides: Partial<ReadableSpan> = {}): ReadableSpan {
     events: [],
     ended: true,
     resource: {} as ReadableSpan["resource"],
-    instrumentationScope: { name: "ireland-open-data-mcp" },
+    instrumentationScope: { name: "open-data-mcp" },
     droppedAttributesCount: 0,
     droppedEventsCount: 0,
     droppedLinksCount: 0,
@@ -91,7 +91,7 @@ describe("flat OpenTelemetry logging", () => {
       readableSpan({
         kind: SpanKind.CLIENT,
         instrumentationScope: {
-          name: "ireland-open-data-mcp.library.http",
+          name: "open-data-mcp.library.http",
         },
       }),
     );

@@ -1,6 +1,6 @@
 {
-  "name": "ireland-open-data-mcp",
-  "version": "0.0.0",
+  "name": "open-data-mcp",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "engines": {

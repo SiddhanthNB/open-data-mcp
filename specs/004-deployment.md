@@ -2,7 +2,7 @@
 
 ## Overview
 
-Ireland Open Data MCP is deployed as a remote MCP server on:
+Open Data MCP is deployed as a remote MCP server on:
 
 **Cloudflare Workers using TypeScript**
 
@@ -52,7 +52,7 @@ Expected flow:
 Production releases use `.github/workflows/ci-cd.yml`. Pushing a `v*` tag runs
 the locked install, typecheck, tests, and Wrangler dry-run against that tagged
 commit. Deployment runs only after those checks pass, using the GitHub Actions
-repository secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`.
+repository secrets `OPEN_DATA_MCP_CLOUDFLARE_DEPLOY_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`.
 
 ## Configuration
 
@@ -109,7 +109,7 @@ Example conceptual flow:
 MCP Client  
 → HTTPS  
 → Cloudflare Worker  
-→ Ireland Open Data MCP  
+→ Open Data MCP
 → Public Data Provider
 
 ## Authentication
