@@ -4,6 +4,7 @@ import { getMcpAuthContext } from "agents/mcp/server";
 
 import type { ServerConfig } from "./config";
 import { AppError } from "./errors";
+import { withRedisSpan } from "./observability";
 
 interface NativeRateLimitBinding {
   limit(options: { key: string }): Promise<{ success: boolean }>;
@@ -19,6 +20,7 @@ export interface RateLimitEnvironment {
 interface SlidingWindowResult {
   readonly success: boolean;
   readonly reason?: "timeout" | "cacheBlock" | "denyList";
+  readonly reset?: number;
 }
 
 interface SlidingWindowLimiter {
@@ -65,6 +67,7 @@ type NativeCheck = "allowed" | "denied" | "unavailable";
 interface RedisCheck {
   readonly denied: boolean;
   readonly unavailable: boolean;
+  readonly retryAfterSeconds?: number;
 }
 
 const noRateLimitService: RateLimitService = {
@@ -211,22 +214,57 @@ async function checkRedis(
   const results = await Promise.allSettled(checks);
   let denied = false;
   let unavailable = false;
+  const deniedResets: number[] = [];
 
   for (const result of results) {
     if (result.status === "rejected" || result.value.reason === "timeout") {
       unavailable = true;
     } else if (!result.value.success) {
       denied = true;
+      if (
+        typeof result.value.reset === "number" &&
+        Number.isFinite(result.value.reset)
+      ) {
+        deniedResets.push(result.value.reset);
+      }
     }
   }
 
-  return { denied, unavailable };
+  const latestReset = deniedResets.length > 0
+    ? Math.max(...deniedResets)
+    : undefined;
+  const retryAfterSeconds = latestReset === undefined
+    ? undefined
+    : Math.max(1, Math.ceil((latestReset - Date.now()) / 1_000));
+  return { denied, unavailable, retryAfterSeconds };
 }
 
-function rateLimited(message?: string): AppError {
+function rateLimited(message?: string, retryAfterSeconds = 60): AppError {
   return new AppError(
     "RATE_LIMITED",
     message ?? "The MCP request rate limit was exceeded.",
+    { retry_after_seconds: retryAfterSeconds },
+  );
+}
+
+async function checkRedisWithSpan(
+  checks: () => ReadonlyArray<Promise<SlidingWindowResult>>,
+  source?: string,
+): Promise<RedisCheck> {
+  return withRedisSpan(
+    source ? { source } : {},
+    async (span) => {
+      const result = await checkRedis(checks());
+      span.setAttribute(
+        "outcome",
+        result.unavailable
+          ? "unavailable"
+          : result.denied
+            ? "denied"
+            : "allowed",
+      );
+      return result;
+    },
   );
 }
 
@@ -274,23 +312,29 @@ export function createRateLimitService(
         return;
       }
 
-      const checks = [
-        redis.userMinute.limit(actor),
-        redis.userDay.limit(actor),
-        redis.globalMinute.limit("all"),
-        redis.globalDay.limit("all"),
-      ];
-      if (input.source === "open_meteo_ie") {
-        checks.push(
-          redis.openMeteoMinute.limit("all"),
-          redis.openMeteoHour.limit("all"),
-          redis.openMeteoDay.limit("all"),
-        );
-      }
-
-      const result = await checkRedis(checks);
+      const result = await checkRedisWithSpan(() => {
+        const checks = [
+          redis.userMinute.limit(actor),
+          redis.userDay.limit(actor),
+          redis.globalMinute.limit("all"),
+          redis.globalDay.limit("all"),
+        ];
+        if (input.source === "open_meteo_ie") {
+          checks.push(
+            redis.openMeteoMinute.limit("all"),
+            redis.openMeteoHour.limit("all"),
+            redis.openMeteoDay.limit("all"),
+          );
+        }
+        return checks;
+      }, input.source);
       if (result.denied) {
-        throw rateLimited();
+        throw rateLimited(
+          undefined,
+          result.unavailable
+            ? Math.max(result.retryAfterSeconds ?? 0, 60)
+            : result.retryAfterSeconds ?? 60,
+        );
       }
       if (
         result.unavailable &&
@@ -310,7 +354,9 @@ export function createRateLimitService(
       if (redis === undefined) {
         return native === "allowed";
       }
-      const result = await checkRedis([redis.oauthMinute.limit(ipAddress)]);
+      const result = await checkRedisWithSpan(() => [
+        redis.oauthMinute.limit(ipAddress),
+      ]);
       if (result.denied) {
         return false;
       }

@@ -179,19 +179,32 @@ Timeout values may be configured per provider.
 
 ## Logging
 
-The application should log operational information needed for debugging.
+Workers Logs persists the application's flat console output. Cloudflare trace
+persistence is disabled. The service uses the OpenTelemetry JavaScript SDK with
+a `service.name` resource, an AsyncLocalStorage context manager, a custom span
+processor, and no exporter.
 
-Logs should include:
+Every emitted application line is single-line text and carries a 32-hex trace
+ID plus a 16-hex span ID, or `-` outside a span. The span processor emits one
+end line containing name, parent span ID, duration, status, and only these
+optional attributes:
 
-- provider
-- operation
-- success or failure
-- upstream status where relevant
-- execution duration where practical
+- `mcp.tool.name`
+- `source`
+- `outcome`
+- `error.type`
+- `http.response.status_code`
 
-Logs must not expose secrets or authentication tokens.
+Request, tool, and provider spans log at `INFO`. HTTP and Redis library spans
+log at `DEBUG`. Production defaults to `INFO`; setting
+`OPEN_DATA_MCP_LOG_LEVEL=debug` enables debug lines. Dynamic text is flattened,
+bounded, and scrubbed before logging. Secrets and raw URLs must not be logged.
 
-Logging should use Worker-compatible console output and structured fields where practical.
+Every non-`/ping` request begins a new root trace without accepting an inbound
+`traceparent`. Outbound fetches remove trace propagation headers. The trace ID
+is formatted as a UUID in the `X-Request-ID` response header, which is exposed
+through `Access-Control-Expose-Headers`. `/ping` is untraced and logs only at
+`DEBUG`.
 
 ## Caching
 

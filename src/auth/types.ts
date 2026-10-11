@@ -4,6 +4,7 @@ import type { RateLimitService } from "../rate-limit";
 
 export interface AuthEnv {
   readonly [name: string]: unknown;
+  readonly OPEN_DATA_MCP_LOG_LEVEL?: string;
   readonly OAUTH_KV?: KVNamespace;
   readonly OAUTH_PROVIDER?: OAuthHelpers;
   readonly MCP_USER_RATE_LIMITER?: RateLimit;

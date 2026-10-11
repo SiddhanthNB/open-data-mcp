@@ -4,6 +4,7 @@ import {
   type ResourceLink,
   type StandardSchemaWithJSON,
 } from "@modelcontextprotocol/server";
+import { SpanStatusCode } from "@opentelemetry/api";
 import { z } from "zod";
 
 import { providerConfigs, serverConfig } from "../config";
@@ -23,6 +24,7 @@ import type {
   QueryDataResult,
   Source,
 } from "../models";
+import { withAppSpan } from "../observability";
 import { enforceSerializedSize } from "../resources/limits";
 import type { RateLimitService, ToolRateLimitInput } from "../rate-limit";
 import type { SourceRouter } from "../router";
@@ -42,7 +44,7 @@ const defaultLimitDescription = configuredDefaults
   ? `Provider defaults: ${configuredDefaults}.`
   : "No providers are currently enabled.";
 const rateLimitDescription =
-  `Valid tool executions are limited to ${serverConfig.rate_limits.user.requests_per_minute} per rolling minute and ${serverConfig.rate_limits.user.requests_per_24_hours} per rolling 24 hours per user; service-wide limits are ${serverConfig.rate_limits.global.requests_per_minute} per rolling minute and ${serverConfig.rate_limits.global.requests_per_24_hours} per rolling 24 hours. open_meteo_ie additionally has global limits of ${serverConfig.rate_limits.providers.open_meteo_ie.requests_per_minute} per minute, ${serverConfig.rate_limits.providers.open_meteo_ie.requests_per_hour} per hour, and ${serverConfig.rate_limits.providers.open_meteo_ie.requests_per_24_hours} per 24 hours.`;
+  `Each valid tool call costs one quota unit. Valid tool executions are limited to ${serverConfig.rate_limits.user.requests_per_minute} per rolling minute and ${serverConfig.rate_limits.user.requests_per_24_hours} per rolling 24 hours per user; service-wide limits are ${serverConfig.rate_limits.global.requests_per_minute} per rolling minute and ${serverConfig.rate_limits.global.requests_per_24_hours} per rolling 24 hours. open_meteo_ie additionally has shared global limits of ${serverConfig.rate_limits.providers.open_meteo_ie.requests_per_minute} per minute, ${serverConfig.rate_limits.providers.open_meteo_ie.requests_per_hour} per hour, and ${serverConfig.rate_limits.providers.open_meteo_ie.requests_per_24_hours} per 24 hours. Independent calls may run in parallel; use at most 3 concurrent calls. Fetch cursor pages for the same query sequentially.`;
 const maxFields = 10;
 const maxFilters = 20;
 const maxFilterValues = 100;
@@ -70,6 +72,12 @@ function publicRateLimits(): object {
         requests_per_24_hours:
           limits.providers.open_meteo_ie.requests_per_24_hours,
       },
+    },
+    planning: {
+      quota_units_per_valid_tool_call: 1,
+      recommended_max_parallel_independent_calls: 3,
+      cursor_pages_for_same_query: "sequential",
+      rate_limited_response: "retry_after_seconds",
     },
   };
 }
@@ -331,6 +339,58 @@ function rateLimitInput(value: unknown): ToolRateLimitInput {
   return {};
 }
 
+function inputSource(value: unknown): string | undefined {
+  return rateLimitInput(value).source;
+}
+
+async function traceToolCall(
+  toolName: string,
+  input: unknown,
+  operation: () => Promise<CallToolResult>,
+): Promise<CallToolResult> {
+  const source = inputSource(input);
+  return withAppSpan(
+    `mcp.tool ${toolName}`,
+    {
+      "mcp.tool.name": toolName,
+      ...(source ? { source } : {}),
+    },
+    async (span) => {
+      const result = await operation();
+      if (result.isError) {
+        span.setStatus({ code: SpanStatusCode.ERROR });
+        span.setAttribute("outcome", "failed");
+        const errorType =
+          typeof result.structuredContent === "object" &&
+          result.structuredContent !== null &&
+          "error" in result.structuredContent
+            ? result.structuredContent.error
+            : undefined;
+        if (typeof errorType === "string") {
+          span.setAttribute("error.type", errorType);
+        }
+      } else {
+        span.setStatus({ code: SpanStatusCode.OK });
+        span.setAttribute("outcome", "success");
+      }
+      return result;
+    },
+    false,
+  );
+}
+
+async function callProvider<T>(
+  source: Source,
+  operationName: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  return withAppSpan(
+    `provider.${operationName}`,
+    { source },
+    async () => operation(),
+  );
+}
+
 export function registerTools(
   server: McpServer,
   router: SourceRouter,
@@ -380,7 +440,7 @@ export function registerTools(
       inputSchema: advertisedSchema(listSourcesInput),
     },
     async (input) =>
-      executeValidated(
+      traceToolCall("list_sources", input, () => executeValidated(
         listSourcesInput,
         input,
         async () => ({
@@ -388,7 +448,7 @@ export function registerTools(
           rate_limits: publicRateLimits(),
         }),
         rateLimiter,
-      ),
+      )),
   );
 
   server.registerTool(
@@ -399,7 +459,7 @@ export function registerTools(
       inputSchema: advertisedSchema(searchDataInput),
     },
     async (input) =>
-      executeValidated(
+      traceToolCall("search_data_by_source", input, () => executeValidated(
         searchDataInput,
         input,
         async ({ source: requestedSource, query, limit, cursor }) => {
@@ -409,15 +469,19 @@ export function registerTools(
           );
           const source = adapter.config.provider;
           const continuation = decodeSearchCursor(cursor, source, query);
-          const result = await adapter.searchData({
-            query: continuation.query,
-            limit,
-            offset: continuation.offset,
-          });
+          const result = await callProvider(
+            source,
+            "search_data_by_source",
+            () => adapter.searchData({
+              query: continuation.query,
+              limit,
+              offset: continuation.offset,
+            }),
+          );
           return searchResponse(source, continuation.query, result);
         },
         rateLimiter,
-      ),
+      )),
   );
 
   server.registerTool(
@@ -428,15 +492,19 @@ export function registerTools(
       inputSchema: advertisedSchema(describeDataInput),
     },
     async (input) =>
-      executeValidated(
+      traceToolCall("describe_data_by_id", input, () => executeValidated(
         describeDataInput,
         input,
         async ({ source, data_id }) => {
           const adapter = router.resolve(source, "describe_data_by_id");
-          return adapter.describeData({ data_id });
+          return callProvider(
+            adapter.config.provider,
+            "describe_data_by_id",
+            () => adapter.describeData({ data_id }),
+          );
         },
         rateLimiter,
-      ),
+      )),
   );
 
   server.registerTool(
@@ -447,7 +515,7 @@ export function registerTools(
       inputSchema: advertisedSchema(queryDataInput),
     },
     async (input) =>
-      executeValidated(
+      traceToolCall("query_data_by_id", input, () => executeValidated(
         queryDataInput,
         input,
         async ({
@@ -470,13 +538,17 @@ export function registerTools(
             access_id,
             { fields, filters, spatial, time_range },
           );
-          const result = await adapter.queryData({
-            data_id,
-            access_id,
-            ...continuation.selectors,
-            limit,
-            offset: continuation.offset,
-          });
+          const result = await callProvider(
+            source,
+            "query_data_by_id",
+            () => adapter.queryData({
+              data_id,
+              access_id,
+              ...continuation.selectors,
+              limit,
+              offset: continuation.offset,
+            }),
+          );
           return queryResponse(
             source,
             data_id,
@@ -486,7 +558,7 @@ export function registerTools(
           );
         },
         rateLimiter,
-      ),
+      )),
   );
 
   server.registerTool(
@@ -497,18 +569,22 @@ export function registerTools(
       inputSchema: advertisedSchema(getDataLinkInput),
     },
     async (input) =>
-      executeValidatedLink(
+      traceToolCall("get_data_link_by_id", input, () => executeValidatedLink(
         getDataLinkInput,
         input,
         async ({ source, data_id, access_id }) => {
           const adapter = router.resolve(source, "get_data_link_by_id");
-          return adapter.getDataLink({
-            data_id,
-            access_id,
-          });
+          return callProvider(
+            adapter.config.provider,
+            "get_data_link_by_id",
+            () => adapter.getDataLink({
+              data_id,
+              access_id,
+            }),
+          );
         },
         rateLimiter,
-      ),
+      )),
   );
 }
 

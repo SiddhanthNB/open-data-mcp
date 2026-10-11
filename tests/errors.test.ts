@@ -22,4 +22,14 @@ describe("AppError", () => {
       message: "limit must be positive",
     });
   });
+
+  it("adds safe retry timing to rate-limit responses", () => {
+    const error = new AppError("RATE_LIMITED");
+
+    expect(error.toJSON()).toEqual({
+      error: "RATE_LIMITED",
+      message: "The upstream provider rate limit was exceeded.",
+      retry_after_seconds: 60,
+    });
+  });
 });

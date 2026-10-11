@@ -47,6 +47,18 @@ Workers Rate Limiting bindings run first and provide a per-location fallback
 when Redis is unavailable. Initialization, tool discovery, and ping do not
 consume tool limits.
 
+Each valid tool call costs one quota unit. Independent calls may run in
+parallel, with at most three recommended concurrently. Cursor pages belonging
+to the same query must be requested sequentially. `RATE_LIMITED` tool results
+include `retry_after_seconds`; no live remaining-quota counter is exposed.
+
+The outer Worker handler starts one fresh OpenTelemetry server span for every
+request except `/ping`. Incoming trace context is ignored and outbound trace
+context is never propagated. App-owned tool and provider spans are children of
+the request span. HTTP client and Redis rate-limit spans are library spans.
+There is no exporter: a synchronous span processor writes one flat console line
+per ended span, and `X-Request-ID` is the trace ID formatted as a UUID.
+
 ## 2. Source Router
 
 The router maps a source identifier to its provider adapter.

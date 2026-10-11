@@ -74,3 +74,11 @@ GitHub Actions. Configure the repository secrets `CLOUDFLARE_API_TOKEN` and
 
 Runtime: Cloudflare Workers, TypeScript, stateless Streamable HTTP at `/mcp`,
 and YAML-configured provider adapters.
+
+## Logs
+
+Cloudflare Workers Logs stores flat OpenTelemetry-correlated console lines.
+Each non-health request gets a fresh trace ID and returns the same ID as
+`X-Request-ID`. Production defaults to `INFO`; set
+`OPEN_DATA_MCP_LOG_LEVEL=debug` locally to include outbound HTTP and Redis spans.
+No trace exporter or tracing backend is configured. `/ping` is untraced.

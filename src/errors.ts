@@ -16,14 +16,26 @@ export type ErrorCode = keyof typeof ERROR_MESSAGES;
 
 export class AppError extends Error {
   readonly code: ErrorCode;
+  readonly details?: Readonly<Record<string, string | number | boolean>>;
 
-  constructor(code: ErrorCode, message: string = ERROR_MESSAGES[code]) {
+  constructor(
+    code: ErrorCode,
+    message: string = ERROR_MESSAGES[code],
+    details?: Readonly<Record<string, string | number | boolean>>,
+  ) {
     super(message);
     this.name = "AppError";
     this.code = code;
+    this.details =
+      details ??
+      (code === "RATE_LIMITED" ? { retry_after_seconds: 60 } : undefined);
   }
 
-  toJSON(): { error: ErrorCode; message: string } {
-    return { error: this.code, message: this.message };
+  toJSON(): {
+    error: ErrorCode;
+    message: string;
+    [key: string]: string | number | boolean;
+  } {
+    return { error: this.code, message: this.message, ...this.details };
   }
 }

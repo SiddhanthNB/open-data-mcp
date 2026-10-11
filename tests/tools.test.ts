@@ -2,6 +2,7 @@ import { createMcpHandler } from "agents/mcp/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { providerConfigs, serverConfig } from "../src/config";
+import { AppError } from "../src/errors";
 import { SOURCES } from "../src/models";
 import type {
   DataLink,
@@ -276,7 +277,13 @@ describe("source-neutral MCP tools", () => {
       "60 per rolling minute and 1000 per rolling 24 hours per user",
     );
     expect(search?.description).toContain(
-      "open_meteo_ie additionally has global limits of 500 per minute, 4000 per hour, and 8000 per 24 hours",
+      "open_meteo_ie additionally has shared global limits of 500 per minute, 4000 per hour, and 8000 per 24 hours",
+    );
+    expect(search?.description).toContain(
+      "Independent calls may run in parallel; use at most 3 concurrent calls",
+    );
+    expect(search?.description).toContain(
+      "Fetch cursor pages for the same query sequentially",
     );
     expect(search?.inputSchema.required).toEqual(["source"]);
     expect(search?.inputSchema.properties).not.toHaveProperty("offset");
@@ -324,6 +331,25 @@ describe("source-neutral MCP tools", () => {
     expect(rateLimiter.limitTool).toHaveBeenCalledOnce();
     expect(rateLimiter.limitTool).toHaveBeenCalledWith({
       source: "data_gov_ie",
+    });
+  });
+
+  it("returns structured retry timing when a tool is rate limited", async () => {
+    vi.mocked(rateLimiter.limitTool).mockRejectedValueOnce(
+      new AppError(
+        "RATE_LIMITED",
+        "The MCP request rate limit was exceeded.",
+        { retry_after_seconds: 37 },
+      ),
+    );
+
+    const result = await callTool("list_sources", {});
+
+    expect(result.isError).toBe(true);
+    expect(errorContent(result)).toEqual({
+      error: "RATE_LIMITED",
+      message: "The MCP request rate limit was exceeded.",
+      retry_after_seconds: 37,
     });
   });
 
@@ -417,6 +443,12 @@ describe("source-neutral MCP tools", () => {
             requests_per_hour: 4_000,
             requests_per_24_hours: 8_000,
           },
+        },
+        planning: {
+          quota_units_per_valid_tool_call: 1,
+          recommended_max_parallel_independent_calls: 3,
+          cursor_pages_for_same_query: "sequential",
+          rate_limited_response: "retry_after_seconds",
         },
       },
     });

@@ -11,7 +11,9 @@ function nativeBinding(success = true) {
 }
 
 function redisLimiter(
-  result: { success: boolean; reason?: "timeout" } = { success: true },
+  result: { success: boolean; reason?: "timeout"; reset?: number } = {
+    success: true,
+  },
 ) {
   return { limit: vi.fn(async () => result) };
 }
@@ -84,21 +86,27 @@ describe("rate limit service", () => {
 
     await expect(service.limitTool()).rejects.toMatchObject({
       code: "RATE_LIMITED",
+      details: { retry_after_seconds: 60 },
     });
     expect(createRedisLimiters).not.toHaveBeenCalled();
   });
 
   it("rejects when a Redis sliding window is exhausted", async () => {
+    const reset = Date.now() + 90_000;
     const service = createRateLimitService(serverConfig.rate_limits, {
       environment,
       actorIdentifier: () => "github:123",
       createRedisLimiters: () =>
-        redisLimiters({ userMinute: redisLimiter({ success: false }) }),
+        redisLimiters({
+          userMinute: redisLimiter({ success: false, reset }),
+          userDay: redisLimiter({ success: false, reset: reset + 30_000 }),
+        }),
     });
 
     await expect(service.limitTool()).rejects.toMatchObject({
       code: "RATE_LIMITED",
       message: "The MCP request rate limit was exceeded.",
+      details: { retry_after_seconds: 120 },
     });
   });
 

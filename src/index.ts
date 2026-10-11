@@ -7,6 +7,10 @@ import {
   type WorkerHandler,
 } from "./auth";
 import { serverConfig, type AuthConfig } from "./config";
+import {
+  createObservedWorkerHandler,
+  createTracedFetch,
+} from "./observability";
 import { DirectResourceLoader } from "./resources";
 import {
   createRateLimitService,
@@ -26,18 +30,19 @@ export interface WorkerDependencies {
 export function createWorkerHandler(
   dependencies: WorkerDependencies = {},
 ): WorkerHandler {
+  const outboundFetch = createTracedFetch(dependencies.fetch ?? fetch);
   const resourceLimits = {
     maxInputBytes: serverConfig.resources.max_input_bytes,
     maxOutputBytes: serverConfig.resources.max_output_bytes,
   };
   const resourceLoader = new DirectResourceLoader({
-    fetch: dependencies.fetch,
+    fetch: outboundFetch,
     ...resourceLimits,
   });
   const router = createSourceRouter({
     resourceLoader,
     ...resourceLimits,
-    ...(dependencies.fetch ? { fetch: dependencies.fetch } : {}),
+    fetch: outboundFetch,
     ...(dependencies.now ? { now: dependencies.now } : {}),
   });
   const rateLimiter =
@@ -57,14 +62,15 @@ export function createWorkerHandler(
     },
   };
 
-  return createAuthHandler(
+  const authenticated = createAuthHandler(
     dependencies.authConfig ?? serverConfig.auth,
     mcpHandler,
     {
-      ...(dependencies.fetch ? { fetch: dependencies.fetch } : {}),
+      fetch: outboundFetch,
       rateLimiter,
     },
   );
+  return createObservedWorkerHandler(authenticated);
 }
 
 const handler = createWorkerHandler();

@@ -7,6 +7,19 @@
     "nodejs_compat",
     "global_fetch_strictly_public"
   ],
+  "observability": {
+    "enabled": true,
+    "redact_query_string": true,
+    "logs": {
+      "enabled": true,
+      "invocation_logs": false,
+      "persist": true
+    },
+    "traces": {
+      "enabled": false,
+      "persist": false
+    }
+  },
   "rules": [
     {
       "type": "Text",

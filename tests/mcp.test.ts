@@ -37,6 +37,7 @@ async function sendMcpRequest(
   params: Record<string, unknown>,
   id: number,
   worker?: WorkerHandler,
+  extraHeaders?: HeadersInit,
 ): Promise<{ response: Response; payload: JsonRpcResponse }> {
   const request = new Request("http://example.com/mcp", {
     method: "POST",
@@ -44,6 +45,7 @@ async function sendMcpRequest(
       Accept: "application/json, text/event-stream",
       "Content-Type": "application/json",
       "MCP-Protocol-Version": protocolVersion,
+      ...Object.fromEntries(new Headers(extraHeaders)),
     },
     body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
   });
@@ -86,6 +88,12 @@ describe("stateless MCP Worker", () => {
     );
 
     expect(initialized.response.headers.get("MCP-Session-Id")).toBeNull();
+    expect(initialized.response.headers.get("X-Request-ID")).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u,
+    );
+    expect(
+      initialized.response.headers.get("Access-Control-Expose-Headers"),
+    ).toContain("X-Request-ID");
     expect(initialized.payload.error).toBeUndefined();
     expect(initialized.payload.result).toMatchObject({
       protocolVersion,
@@ -222,5 +230,48 @@ describe("stateless MCP Worker", () => {
     });
 
     expect(response.status).toBe(404);
+  });
+
+  it("starts a fresh trace instead of accepting inbound trace context", async () => {
+    const inboundTraceId = "11111111111111111111111111111111";
+    const result = await sendMcpRequest(
+      "initialize",
+      {
+        protocolVersion,
+        capabilities: {},
+        clientInfo: { name: "test-client", version: "0.0.0" },
+      },
+      5,
+      undefined,
+      {
+        traceparent: `00-${inboundTraceId}-2222222222222222-01`,
+      },
+    );
+
+    expect(result.response.headers.get("X-Request-ID")?.replaceAll("-", ""))
+      .not.toBe(inboundTraceId);
+  });
+
+  it("serves an untraced debug-only health check", async () => {
+    const debug = vi.spyOn(console, "debug").mockImplementation(() => undefined);
+    const worker = createWorkerHandler({
+      authConfig: anonymousAuthConfig,
+      rateLimiter: getNoRateLimitService(),
+    });
+    const context = createExecutionContext();
+
+    const response = await worker.fetch(
+      new Request("http://example.com/ping"),
+      { OPEN_DATA_MCP_LOG_LEVEL: "debug" },
+      context,
+    );
+    await waitOnExecutionContext(context);
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ status: "ok" });
+    expect(response.headers.get("X-Request-ID")).toBeNull();
+    expect(debug).toHaveBeenCalledWith(
+      "[DEBUG] [trace: -] [span: -] : Health check completed",
+    );
   });
 });

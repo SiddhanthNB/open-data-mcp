@@ -244,6 +244,17 @@ rate-limit bindings run first and act as the fallback for general MCP and OAuth
 limits when Redis is unavailable. `RATE_LIMITED` is returned when a limit is
 exhausted.
 
+Each valid tool call consumes one quota unit. Independent calls may run in
+parallel, but clients should use no more than three concurrent calls. Cursor
+pages for one query must be fetched sequentially. All tool descriptions expose
+this planning guidance and the configured user, service, and Open-Meteo limits.
+`list_sources` also returns the complete structured policy.
+
+`RATE_LIMITED` tool results include `retry_after_seconds`. When Redis denies
+more than one applicable window, the value waits for the latest reset. Native
+or unavailable limiter fallbacks use 60 seconds. Remaining quota is not
+reported because concurrent callers make it unreliable.
+
 ## Standard Response Metadata
 
 Responses include provenance where available:

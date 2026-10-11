@@ -9,5 +9,17 @@ export default defineConfig({
   ],
   test: {
     testTimeout: 15_000,
+    deps: {
+      optimizer: {
+        ssr: {
+          enabled: true,
+          include: [
+            "@opentelemetry/api",
+            "@opentelemetry/resources",
+            "@opentelemetry/sdk-trace-base",
+          ],
+        },
+      },
+    },
   },
 });
